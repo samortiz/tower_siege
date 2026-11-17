@@ -1,0 +1,13 @@
+{
+  "appId": "com.towersiege.game",
+  "appName": "Tower Siege",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#111418"
+  },
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "disable"
+    }
+  }
+}
