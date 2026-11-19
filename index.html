@@ -213,10 +213,10 @@ const DEFS = {
   arrow:  { name: 'Arrow Tower', key: '2', cost: 50,  hp: 150, color: '#d4a62a', range: 5,   interval: 0.55, dmg: 12, desc: 'Fast, hits air' },
   cannon: { name: 'Cannon',      key: '3', cost: 110, hp: 220, color: '#c0483f', range: 4.5, interval: 1.7,  dmg: 42, splash: 1.3, desc: 'Splash, ground only' },
   frost:  { name: 'Frost Tower', key: '4', cost: 80,  hp: 150, color: '#4fb3d9', range: 3,   interval: 1.0,  dmg: 4,  desc: 'Slows enemies' },
-  mine:   { name: 'Gold Mine',   key: '5', cost: 120, hp: 120, color: '#e8c24a', interval: 4, income: 5, desc: '+gold over time' },
+  mine:   { name: 'Gold Mine',   key: '5', cost: 120, hp: 120, color: '#e8c24a', interval: 4, income: 6, desc: '+gold over time' },
   bridge:   { name: 'Bridge',     key: 'B', cost: 20,  hp: 1,   color: '#8a5e32', desc: 'Build over water' },
   medic:    { name: 'Medic Tent', key: 'M', cost: 120, hp: 180, color: '#f2f2f2', interval: 10, unitHp: 50, maxUnits: 1, heal: 30, desc: 'Medics repair & heal' },
-  barracks: { name: 'Barracks',  key: '6', cost: 150, hp: 300, color: '#4caf7a', interval: 7, dmg: 9, unitHp: 70, maxUnits: 3, desc: 'Trains soldiers' },
+  barracks: { name: 'Barracks',  key: '6', cost: 150, hp: 300, color: '#4caf7a', interval: 7, dmg: 9, unitHp: 70, maxUnits: 3, maxLevel: 5, desc: 'Trains soldiers' },
 };
 const BUILD_TIME = 1;   // seconds for a newly placed building to finish construction (bridges are instant)
 const ORDER = ['wall', 'arrow', 'cannon', 'frost', 'mine', 'barracks', 'medic', 'bridge'];
@@ -230,12 +230,17 @@ const HERO_UPS = {
   // Knight only (in place of Range and Multishot)
   armor: { name: 'Armor',     key: '9', base: 35,  max: 5, color: '#b8c4d4' },
   taunt: { name: 'Taunt',     key: '0', base: 100, max: 3, color: '#ff6a5a' },
+  // Engineer only (in place of Range and Multishot)
+  power: { name: 'Aura Power', key: '9', base: 50,  max: 5, color: '#ffb347' },
+  aura:  { name: 'Aura Size', key: '0', base: 80,  max: 4, color: '#e0912c' },
 };
 const HERO_ORDER = ['dmg', 'rate', 'range', 'multi'];
 const heroOrder = () => (hero && hero.ups) || HERO_ORDER;   // the four upgrade slots of the bound hero
 const ARMOR_PER = 0.1;   // Knight's Armor: 10% less damage taken per level
 const tauntR = h => (TAUNT_R + ((h.heroUp && h.heroUp.taunt) || 0)) * T;   // Knight's Taunt: +1 tile of pull per level
 const SLOT_W = 87, HERO_X = 12 + 8 * SLOT_W + 4, HERO_W = 69;
+// Total gold paid for a set of hero upgrade levels (each level costs base × 1.7^level)
+const upgradeSpend = up => Object.keys(HERO_UPS).reduce((s, k) => { for (let i = 0; i < (up[k] || 0); i++) s += Math.round(HERO_UPS[k].base * Math.pow(1.7, i)); return s; }, 0);
 const heroCost = k => Math.round(HERO_UPS[k].base * Math.pow(1.7, heroUp[k]));
 // Hero types, picked on the hero select screen. dmg/interval/range are the base weapon; upgrades scale them.
 const HEROES = {
@@ -246,13 +251,35 @@ const HEROES = {
             tagline: 'Sword and throwing daggers', perk: 'Very tough. Taunts nearby enemies into fighting him instead of your buildings. The sword hits every enemy in reach and knocks them back; daggers (shortest range of any hero) pick off enemies a little further out. Chops four times as fast. Upgrades Armor and Taunt instead of Range and Multishot.' },
   mage:   { name: 'Mage', color: '#9a5ae0', hp: 80, speed: 155, dmg: 16, interval: 0.7, range: 6.5, targets: 1, work: 1, kind: 'fire', splash: 1.1,
             tagline: 'Fire staff', perk: 'Longest reach. Fireballs explode and burn every enemy nearby — great against crowds. Fragile.' },
-  engineer: { name: 'Engineer', color: '#e0912c', hp: 120, speed: 150, dmg: 7, interval: 0.32, range: 4.5, targets: 1, work: 1, kind: 'rivet',
-            tagline: 'Rivet gun and toolbox', perk: 'Weakest gun, but your buildings within 3 tiles of him work 40% faster, and buildings under construction near him finish 3× faster. Repairs buildings and the core three times as fast.' },
+  engineer: { name: 'Engineer', color: '#e0912c', hp: 120, speed: 150, dmg: 7, interval: 0.32, range: 4.5, targets: 1, work: 1, kind: 'rivet', ups: ['dmg', 'rate', 'power', 'aura'],
+            tagline: 'Rivet gun and toolbox', perk: 'Weakest gun, but your buildings within 3 tiles of him work 40% faster, and buildings under construction near him finish 3× faster. Repairs buildings and the core three times as fast. Towers near him pay him 30% of their kill gold. Upgrades Aura Power (each level: buildings work +10% faster, construction and repairs +0.4× faster, +5% tower gold) and Aura Size (+½ tile per level, up to 5 tiles) instead of Range and Multishot.' },
 };
 const HERO_TYPES = ['ranger', 'knight', 'mage', 'engineer'];
 const OVERDRIVE_R = 3, OVERDRIVE = 1.4, BUILD_BOOST = 3, ENG_REPAIR = 3;   // Engineer: aura radius (tiles), building work speed and construction speed inside it, repair multiplier
-// true when a living Engineer stands within aura range of the tile's centre
-const engineerNear = (px, py) => players.some(h => h.alive && h.heroType === 'engineer' && d2(h.x, h.y, px, py) < (OVERDRIVE_R * T) ** 2);
+const AURA_PER = 0.5;   // Engineer's Aura upgrade: +½ tile of radius per level
+const auraR = h => (OVERDRIVE_R + AURA_PER * ((h.heroUp && h.heroUp.aura) || 0)) * T;
+// The nearest living Engineer whose aura covers this point (his id), or null. A tower he stands next to pays him a cut of its kill gold (see engCut).
+function towerEngineer(px, py) {
+  let best = null, bd = Infinity;
+  for (const h of players) if (h.alive && h.heroType === 'engineer') { const dd = d2(h.x, h.y, px, py); if (dd < auraR(h) ** 2 && dd < bd) { bd = dd; best = h.id; } }
+  return best;
+}
+const ENG_TOWER_CUT = 0.3;
+// Aura Power also raises, per level: construction speed +0.4× (3× → 5×), repair speed +0.4× (3× → 5×), tower gold cut +5% (30% → 55%)
+const BUILD_PER = 0.4, REPAIR_PER = 0.4, CUT_PER = 0.05;
+const engPower = h => (h && h.heroUp && h.heroUp.power) || 0;
+const engRepair = h => ENG_REPAIR + REPAIR_PER * engPower(h);
+const engCut = h => ENG_TOWER_CUT + CUT_PER * engPower(h);
+const POWER_PER = 0.1;   // Engineer's Aura Power upgrade: +10% building work speed per level (1.4× → 1.9×)
+// How much faster a building at this point works: the strongest covering Engineer's overdrive, or 1 with none nearby
+// The highest Aura Power level among living Engineers covering this point, or -1 when none is in range
+function auraPowerAt(px, py) {
+  let m = -1;
+  for (const h of players) if (h.alive && h.heroType === 'engineer' && d2(h.x, h.y, px, py) < auraR(h) ** 2) m = Math.max(m, engPower(h));
+  return m;
+}
+// true when a living Engineer stands within aura range of the point
+const engineerNear = (px, py) => players.some(h => h.alive && h.heroType === 'engineer' && d2(h.x, h.y, px, py) < auraR(h) ** 2);
 const TAUNT_R = 3;        // tiles: ground enemies this close to a Knight drop everything to fight him
 const BIG_R = 13;         // enemies this large (brute, splitter, bosses) ignore a Ranger or Mage they can't already hit
 const KNOCK = 0.8 * 32, KNOCK_T = 0.15;   // Knight's sword: knockback distance (px, for enemies up to 12 px radius; bigger ones fly less) and how long the shove takes
@@ -270,7 +297,7 @@ function buyHero(k) {   // for the bound player (see bindP)
   if (!heroOrder().includes(k)) return;
   if (heroUp[k] >= u.max) { floatText(player.x, player.y - 24, u.name + ' maxed', '#aaa', 13, 1, to); return; }
   const c = heroCost(k);
-  if (!spend(player, c)) { floatText(player.x, player.y - 24, `Need ${c} gold`, '#f77', 13, 1, to); return; }
+  if (!spendHero(player, c)) { floatText(player.x, player.y - 24, coop() ? `Need ${c} gold in your wallet` : `Need ${c} gold`, '#f77', 13, 1, to); return; }
   heroUp[k]++;
   burst(player.x, player.y, u.color, 16, 120);
   floatText(player.x, player.y - 24, `${u.name} ${heroUp[k]}/${u.max}`, u.color, 14);
@@ -292,11 +319,13 @@ const ETYPES = {
   climber:   { hp: 55, speed: 60, dmg: 9, rate: 0.9, gold: 6, r: 9, color: '#a8865a', climb: true },
   // Swimmer: sluggish on land, fast in rivers, and takes half damage while submerged
   swimmer:   { hp: 70, speed: 38, dmg: 10, rate: 1.0, gold: 6, r: 10, color: '#3fb6a8', swim: true },
+  // Burrower: tunnels under walls and towers instead of chewing through them; only splash damage reaches it underground
+  digger:    { hp: 65, speed: 46, dmg: 11, rate: 1.0, gold: 7, r: 10, color: '#8a6a52', dig: true },
 };
 
 // ---------- State ----------
 let announces = [], rallyMode = null, orderFx = null, soldiers = [], newEnemies = [], heroUp, lossReason = '', grid, dist, core, player, enemies, projectiles, particles, texts, treasury = 0, wave, phase, phaseT,
-    spawnQueue, spawnT, selected, gameState, kills, flowDirty;
+    spawnQueue, spawnT, waveTheme = 'mixed', nextTheme = 'mixed', selected, gameState, kills, flowDirty;
 
 // ---------- Co-op: players, wallets and the shared treasury ----------
 // `players` holds every hero in the game; `me` is the id of the one this browser controls.
@@ -318,6 +347,13 @@ function spend(p, c) {
   const w = Math.min(p.wallet, c); p.wallet -= w; treasury -= c - w;
   return true;
 }
+// Hero upgrades are personal: in co-op they come out of your own wallet only, never the treasury
+const heroFunds = p => coop() ? p.wallet : funds(p);
+function spendHero(p, c) {
+  if (!coop()) return spend(p, c);
+  if (p.wallet < c) return false;
+  p.wallet -= c; return true;
+}
 function earn(p, n) { p.wallet += n; p.stats.gold += n; }
 // Split n gold evenly across every player; leftover coins rotate so nobody is always favoured
 function splitEven(n) {
@@ -327,11 +363,44 @@ function splitEven(n) {
   evenRot = (evenRot + 1) % k;
   return out;
 }
-const heroSpawn = p => [CX * T + T / 2 + ((p.id % 4) - 1.5) * 22, (CY + 2.6) * T];
+// Where a hero appears: just below the core, unless a building, tree or rock is in the way. Then the nearest open
+// tile, searching outward from the core over walkable tiles only, so the hero never lands inside a building or
+// in a pocket walled off from the core.
+function heroSpawn(p) {
+  const x0 = CX * T + T / 2 + ((p.id % 4) - 1.5) * 22, y0 = (CY + 2.6) * T, r = p.r || 10;
+  if (!grid || !grid.length || !terrain || !bodyBlocked(x0, y0, r)) return [x0, y0];
+  const open = (x, y) => inB(x, y) && !grid[y][x] && !isCore(x, y) && !blockT(x, y);
+  const seen = new Set(), key = (x, y) => y * COLS + x;
+  let layer = [];
+  for (let y = CY - 1; y <= CY + 1; y++) for (let x = CX - 1; x <= CX + 1; x++) { layer.push([x, y]); seen.add(key(x, y)); }
+  while (layer.length) {
+    const next = [];
+    for (const [x, y] of layer) for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (seen.has(key(nx, ny)) || !open(nx, ny)) continue;
+      seen.add(key(nx, ny)); next.push([nx, ny]);
+    }
+    // the free tile in this ring closest to the usual spot
+    let best = null, bd = Infinity;
+    for (const [x, y] of next) {
+      const cx = x * T + T / 2, cy = y * T + T / 2, dd = d2(cx, cy, x0, y0);
+      if (dd < bd && !bodyBlocked(cx, cy, r)) { bd = dd; best = [cx, cy]; }
+    }
+    if (best) return best;
+    layer = next;
+  }
+  // Core completely walled in: fall back to any open tile on the map, nearest first
+  let best = [x0, y0], bd = Infinity;
+  for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+    const cx = x * T + T / 2, cy = y * T + T / 2, dd = d2(cx, cy, x0, y0);
+    if (dd < bd && open(x, y) && !bodyBlocked(cx, cy, r)) { bd = dd; best = [cx, cy]; }
+  }
+  return best;
+}
 function makePlayer(id, name, type, colorI = id) {
   const h = HEROES[type] || HEROES.ranger;
   const p = { id, name, colorI, color: P_COLORS[colorI % P_COLORS.length], heroType: HEROES[type] ? type : 'ranger', hero: h, isHero: true,
-    heroUp: { dmg: 0, rate: 0, range: 0, multi: 0, armor: 0, taunt: 0 }, wallet: 0, ready: false, remote: false,
+    heroUp: { dmg: 0, rate: 0, range: 0, multi: 0, armor: 0, taunt: 0, aura: 0, power: 0 }, wallet: 0, ready: false, remote: false,
     x: 0, y: 0, r: 10, hp: h.hp, maxHp: h.hp, alive: true, respawnT: 0, reviveT: 0,
     cd: 0, lastHit: 99, aim: 0, speed: h.speed, work: null,
     stats: { kills: 0, dmg: 0, gold: 0, built: 0, revives: 0 } };
@@ -369,8 +438,17 @@ let terrain, tileSeed, terrainCanvas, bridgeDir, terrainSeed = 1;
 const terr = (x, y) => inB(x, y) ? terrain[y][x] : ROCK;
 const blockT = (x, y) => { const t = terr(x, y); return t === ROCK || t === TREE; };
 // Enemy movement modes: 'ground' walks around mountains, 'climb' goes over them, 'swim' prefers rivers. Each has its own flow field.
-const MODES = ['ground', 'climb', 'swim'];
-const modeOf = e => e.climb ? 'climb' : e.swim ? 'swim' : 'ground';
+const MODES = ['ground', 'climb', 'swim', 'dig'];
+const modeOf = e => e.climb ? 'climb' : e.swim ? 'swim' : e.dig ? 'dig' : 'ground';
+const DIG_COST = 1.8, DIG_SLOW = 0.7;   // Burrower: path cost of tunnelling under a building, and its speed while underground
+// Is a Burrower close enough to a building that it has gone underground?
+function underBuilding(e) {
+  const cx = tileOf(e.x), cy = tileOf(e.y);
+  for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++)
+    if (inB(x, y) && grid[y][x] && rectDist(e.x, e.y, x * T, y * T, T, T) < e.r * 0.9) return true;
+  return false;
+}
+const untouchable = e => e.dead || e.burrow;   // can't be targeted directly (splash still reaches it)
 const mBlock = (m, x, y) => { const t = terr(x, y); return t === TREE || (t === ROCK && m !== 'climb'); };
 const waterAt = (px, py) => terr(tileOf(px), tileOf(py)) === WATER;
 function genTerrain() {
@@ -618,7 +696,7 @@ function reset(roster) {
   departed = {}; pings = []; evenRot = 0;
   bindLocal();
   announces = []; enemies = []; newEnemies = []; soldiers = []; rallyMode = null; orderFx = null; moveGoal = null; projectiles = []; particles = []; texts = []; blasts = [];
-  treasury = diff.gold; wave = 0; phase = 'build'; phaseT = 25; spawnQueue = []; spawnT = 0;
+  treasury = diff.gold; wave = 0; phase = 'build'; phaseT = 25; spawnQueue = []; spawnT = 0; waveTheme = nextTheme = 'mixed';
   selected = null; speedPaused = false; kills = 0; flowDirty = true; lossReason = ''; gridVer++;
   snapCamera();
 }
@@ -639,10 +717,10 @@ const rand = (a, b) => a + Math.random() * (b - a);
 const DIRS = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,1.414],[1,-1,1.414],[-1,1,1.414],[-1,-1,1.414]];
 function diagOk(x, y, dx, dy, m = 'ground') {
   if (!dx || !dy) return true;
-  return !grid[y][x + dx] && !grid[y + dy][x] && !mBlock(m, x + dx, y) && !mBlock(m, x, y + dy);
+  return (m === 'dig' || (!grid[y][x + dx] && !grid[y + dy][x])) && !mBlock(m, x + dx, y) && !mBlock(m, x, y + dy);
 }
 function enterCost(x, y, m = 'ground') {   // ground enemies strongly prefer bridges; Swimmers prefer rivers; Climbers slow down on rock
-  if (grid[y][x]) return WALL_PATH_COST;
+  if (grid[y][x]) return m === 'dig' ? DIG_COST : WALL_PATH_COST;
   const t = terrain[y][x];
   if (t === WATER) return m === 'swim' ? 1 : 9;
   if (t === ROCK) return 1.7;
@@ -697,9 +775,43 @@ function nextStep(tx, ty, m = 'ground') {
 }
 
 // ---------- Waves ----------
+// Wave themes: a themed wave trades about 60% of its regular troops (by gold value, so the total threat stays similar)
+// for its own enemy types. `from`: first wave the theme can appear. 'mixed' is the classic everything-at-once wave.
+const WAVE_THEMES = {
+  mixed:    { name: 'Mixed wave',     color: '#ffffff', from: 1, types: [] },
+  grunt:    { name: 'Grunt horde',    color: '#62c24c', from: 3, types: ['grunt'] },
+  runner:   { name: 'Runner rush',    color: '#e9e15a', from: 3, types: ['runner'] },
+  fish:     { name: 'Fish wave',      color: '#3fb6a8', from: 4, types: ['swimmer'], water: true },
+  sky:      { name: 'Sky raid',       color: '#ff7ab8', from: 4, types: ['flyer'] },
+  splitter: { name: 'Splitter swarm', color: '#ff9a3c', from: 4, types: ['splitter', 'splitter', 'bigsplitter'] },
+  brute:    { name: 'Brute squad',    color: '#9b59b6', from: 5, types: ['brute'] },
+  climber:  { name: 'Mountain climbers', color: '#a8865a', from: 6, types: ['climber'] },
+  digger:   { name: 'Burrower wave',  color: '#8a6a52', from: 7, types: ['digger'] },
+  chaos:    { name: 'Chaos wave',     color: '#ff6060', from: 8, types: ['runner', 'brute', 'flyer', 'swimmer', 'climber', 'digger', 'splitter'] },
+};
+const THEME_SHARE = 0.6;
+const hasWater = () => terrain.some(row => row.includes(1));
+// Waves 1–2 are always mixed; after that about 1 in 3 waves is mixed, and the same theme never comes twice in a row
+function pickTheme(n, prev) {
+  if (n < 3 || Math.random() < 0.33) return 'mixed';
+  const opts = Object.keys(WAVE_THEMES).filter(k => k !== 'mixed' && k !== prev && WAVE_THEMES[k].from <= n && (!WAVE_THEMES[k].water || hasWater()));
+  return opts.length ? opts[(Math.random() * opts.length) | 0] : 'mixed';
+}
+function applyTheme(q, key, n) {
+  const th = WAVE_THEMES[key];
+  if (!th || !th.types.length) return q;
+  const types = th.types.filter(t => t !== 'bigsplitter' || n >= 7);
+  const keep = [], swap = [];
+  for (const t of q) (t === 'boss' || t === 'siege' || Math.random() >= THEME_SHARE ? keep : swap).push(t);
+  let budget = swap.reduce((s, t) => s + ETYPES[t].gold, 0);
+  for (let i = 0; budget > 0; i++) { const t = types[i % types.length]; keep.push(t); budget -= ETYPES[t].gold; }
+  return keep;
+}
 function startWave() {
   wave++; phase = 'wave';
-  const n = wave, q = [];
+  waveTheme = nextTheme || 'mixed'; nextTheme = pickTheme(wave + 1, waveTheme);
+  const n = wave;
+  let q = [];
   for (let i = 0; i < 5 + n * 2; i++) q.push('grunt');
   if (n >= 2) for (let i = 0; i < n; i++) q.push('runner');
   if (n >= 3) for (let i = 0; i < Math.floor(n / 2); i++) q.push('flyer');
@@ -707,9 +819,11 @@ function startWave() {
   if (n >= 3) for (let i = 0; i < Math.floor((n - 1) / 2); i++) q.push('splitter');
   if (n >= 4) for (let i = 0; i < Math.floor(n / 2); i++) q.push('swimmer');
   if (n >= 5) for (let i = 0; i < Math.floor((n - 1) / 2); i++) q.push('climber');
+  if (n >= 6) for (let i = 0; i < Math.floor((n - 3) / 2); i++) q.push('digger');
   if (n >= 7) for (let i = 0; i < Math.floor((n - 4) / 3); i++) q.push('bigsplitter');
   if (n % 5 === 0) for (let i = 0; i < n / 5; i++) q.push('boss');
   if (n >= 6 && (n - 6) % 5 === 0) for (let i = 0; i < 1 + Math.floor((n - 6) / 10); i++) q.push('siege');
+  q = applyTheme(q, waveTheme, n);
   // More heroes, more monsters: +50% of the regular troops per extra player (bosses stay as they are, but get tougher)
   const np = players.length;
   if (np > 1) {
@@ -720,6 +834,7 @@ function startWave() {
   spawnQueue = q; spawnT = 0;
   for (const p of players) p.ready = false;
   announce(`WAVE ${wave}`, '#fff', 28, 2);
+  if (waveTheme !== 'mixed') announce(WAVE_THEMES[waveTheme].name.toUpperCase() + '!', WAVE_THEMES[waveTheme].color, 22, 2.5);
 }
 const coopHp = () => 1 + 0.35 * Math.max(0, players.length - 1);
 function spawnEnemy(type) {
@@ -854,12 +969,16 @@ function siegeImpact(p) {
   for (const h of players) if (h.alive && Math.hypot(h.x - p.tx, h.y - p.ty) < p.splash + h.r) damagePlayer(h, p.dmg * 0.4);
 }
 // src: the id of the hero who dealt the damage, or null for towers, soldiers and everything else (that share goes to the treasury)
-function hurt(e, dmg, src = null) {
+// eng: for tower damage, the Engineer standing next to that tower; he is credited a share of it (engCut) (key 'g<id>': gold only, no kill or damage stats)
+function hurt(e, dmg, src = null, eng = null) {
   if (e.dead) return;
   if (e.swim && waterAt(e.x, e.y)) dmg *= SUBMERGED;
   const credit = Math.min(dmg, Math.max(0, e.hp)), key = src === null ? 't' : String(src);   // overkill earns nothing
   if (!e.dmgBy) e.dmgBy = {};
-  e.dmgBy[key] = (e.dmgBy[key] || 0) + credit;
+  if (src === null && eng !== null) {
+    const g = 'g' + eng, cut = credit * engCut(pById(eng));
+    e.dmgBy[g] = (e.dmgBy[g] || 0) + cut; e.dmgBy.t = (e.dmgBy.t || 0) + credit - cut;
+  } else e.dmgBy[key] = (e.dmgBy[key] || 0) + credit;
   if (src !== null) { const h = pById(src); if (h) h.stats.dmg += credit; }
   e.hp -= dmg; e.hitT = 0.09;
   if (e.hp <= 0) {
@@ -888,8 +1007,8 @@ function payBounty(e) {
   shares.slice().sort((a, b) => (b.exact - b.n) - (a.exact - a.n)).forEach(s => { if (rem > 0) { s.n++; rem--; } });
   let top = null, topD = 0, toTreasury = 0;
   for (const s of shares) {
-    const h = s.k === 't' ? null : pById(+s.k);
-    if (h && by[s.k] > topD) { topD = by[s.k]; top = h; }
+    const eng = s.k[0] === 'g', h = s.k === 't' ? null : pById(+(eng ? s.k.slice(1) : s.k));
+    if (h && !eng && by[s.k] > topD) { topD = by[s.k]; top = h; }
     if (!s.n) continue;
     if (h) { earn(h, s.n); floatText(e.x, e.y - 10, '+' + s.n, '#ffd84a', 12, 0.8, h.id); }
     else toTreasury += s.n;                       // towers, soldiers, or a hero who has since left
@@ -900,7 +1019,7 @@ function payBounty(e) {
 function nearestEnemy(x, y, range, airOk = true, groundOk = true) {
   let best = null, bd = range * range;
   for (const e of enemies) {
-    if (e.dead || (e.fly && !airOk) || (!e.fly && !groundOk)) continue;
+    if (untouchable(e) || (e.fly && !airOk) || (!e.fly && !groundOk)) continue;
     const dd = d2(x, y, e.x, e.y);
     if (dd < bd) { bd = dd; best = e; }
   }
@@ -1155,7 +1274,7 @@ function updateSoldiers(dt) {
     if (u.marching && d2(u.x, u.y, u.hx, u.hy) < (T * 1.2) ** 2) u.marching = false;
     let tgt = null, bd = Infinity;
     for (const e of enemies) {
-      if (e.dead || e.fly) continue;
+      if (untouchable(e) || e.fly) continue;
       if (u.marching ? d2(e.x, e.y, u.x, u.y) > (u.r + e.r + 6) ** 2 : d2(e.x, e.y, u.hx, u.hy) > LEASH * LEASH) continue;
       const dd = d2(e.x, e.y, u.x, u.y);
       if (dd < bd) { bd = dd; tgt = e; }
@@ -1178,7 +1297,7 @@ function updateSoldiers(dt) {
     if (u.lunge) u.lunge = Math.max(0, u.lunge - dt);
   }
   // Bodies don't overlap: soldiers vs enemies, soldiers vs each other, soldiers vs hero
-  const bodies = enemies.filter(e => !e.fly && !e.dead);
+  const bodies = enemies.filter(e => !e.fly && !untouchable(e));
   for (const u of soldiers) {
     if (u.dead) continue;
     for (const o of bodies.concat(soldiers, players.filter(h => h.alive))) {
@@ -1204,6 +1323,7 @@ const stat = (b, k) => {
   if (k === 'interval' && b.type !== 'mine') return v * (1 - 0.1 * (b.level - 1));
   return v;
 };
+const maxLevel = b => DEFS[b.type].maxLevel || 3;   // most buildings stop at level 3; Barracks go to 5
 const upgradeCost = b => Math.round(DEFS[b.type].cost * 0.8 * b.level);
 // All terrain edits go through here so the host can forward them to clients
 function setTerrain(x, y, v, dir = null) {
@@ -1351,7 +1471,7 @@ function sell(b) {
   floatText(b.tx * T + T / 2, b.ty * T, '+' + refund, '#ffd84a', 13, 1, player.id);
 }
 function upgrade(b) {   // anyone can pay to upgrade anyone's building
-  if (b.level >= 3 || b.build > 0) return;
+  if (b.level >= maxLevel(b) || b.build > 0) return;
   const c = upgradeCost(b);
   if (!spend(player, c)) { floatText(b.tx * T + T / 2, b.ty * T, 'Need ' + c, '#f77', 13, 1, player.id); return; }
   b.spent += c; b.level++; gridVer++;
@@ -1444,7 +1564,7 @@ addEventListener('keydown', e => {
   if (gameState === 'over' && k === 'enter') { if (!net.role) startGame(); else if (net.role === 'host') startNetGame(); return; }
   if (gameState === 'heroes') {
     const i = '1234'.indexOf(k);
-    if (i >= 0) pickHero(HERO_TYPES[i]); else if (k === 'enter') startGame(); else if (k === 'escape' || k === 'backspace') gameState = 'menu';
+    if (i >= 0) pickHero(HERO_TYPES[i]); else if (k === 'enter') heroScreenGo(); else if (k === 'escape' || k === 'backspace') heroScreenBack();
     return;
   }
   if ((gameState === 'help' || gameState === 'settings') && (k === 'escape' || k === 'backspace')) { gameState = menuReturn; return; }
@@ -1651,11 +1771,11 @@ function updateHero(p, dt) {
   // Auto-shoot
   p.cd -= dt; p.dcd = (p.dcd || 0) - dt; p.throwT = Math.max(0, (p.throwT || 0) - dt);
   const hr = heroRange() ** 2, byDist = (a, b) => d2(p.x, p.y, a.x, a.y) - d2(p.x, p.y, b.x, b.y);
-  const targets = enemies.filter(e => !e.dead && d2(p.x, p.y, e.x, e.y) < hr).sort(byDist)
+  const targets = enemies.filter(e => !untouchable(e) && d2(p.x, p.y, e.x, e.y) < hr).sort(byDist)
     .slice(0, hero.targets + heroUp.multi);
   // Knight's throwing daggers: aimed at enemies beyond sword reach but inside dagger range
   const dr = daggerRange() ** 2;
-  const dTargets = hero.dagger ? enemies.filter(e => !e.dead && d2(p.x, p.y, e.x, e.y) < dr && d2(p.x, p.y, e.x, e.y) >= hr)
+  const dTargets = hero.dagger ? enemies.filter(e => !untouchable(e) && d2(p.x, p.y, e.x, e.y) < dr && d2(p.x, p.y, e.x, e.y) >= hr)
     .sort(byDist).slice(0, 1 + heroUp.multi) : [];
   if (dTargets.length && p.dcd <= 0) {
     p.dcd = hero.dagger.interval * Math.pow(0.85, heroUp.rate); p.throwT = 0.2;
@@ -1686,12 +1806,12 @@ function updateHero(p, dt) {
     for (let x = tileOf(p.x) - 2; x <= tileOf(p.x) + 2; x++) {
       const b = inB(x, y) && grid[y][x];
       if (b && b.hp < b.maxHp && d2(p.x, p.y, x * T + T / 2, y * T + T / 2) < (2.5 * T) ** 2) {
-        b.hp = Math.min(b.maxHp, b.hp + 25 * (heroType === 'engineer' ? ENG_REPAIR : 1) * dt);
+        b.hp = Math.min(b.maxHp, b.hp + 25 * (heroType === 'engineer' ? engRepair(player) : 1) * dt);
         if (Math.random() < dt * 6) particles.push({ x: x * T + rand(4, 28), y: y * T + rand(4, 28), vx: 0, vy: -30, life: 0.5, max: 0.5, color: '#7f7', s: 2 });
       }
     }
   if (core.hp < core.maxHp && rectDist(p.x, p.y, coreRect.x, coreRect.y, coreRect.w, coreRect.h) < T * 1.5)
-    core.hp = Math.min(core.maxHp, core.hp + 4 * (heroType === 'engineer' ? ENG_REPAIR : 1) * dt);
+    core.hp = Math.min(core.maxHp, core.hp + 4 * (heroType === 'engineer' ? engRepair(player) : 1) * dt);
 }
 
 // ---------- Update ----------
@@ -1733,14 +1853,19 @@ function update(dt) {
                  (e.climb && inB(ntx, nty) && !grid[nty][ntx] && !isCore(ntx, nty) && !mBlock('climb', ntx, nty));
       if (ok) { e.x = nx; e.y = ny; } else e.kbT = 0;
     }
+    if (e.dig) {   // Burrower: dives underground next to buildings and pops back up in the open
+      const was = !!e.burrow; e.burrow = underBuilding(e);
+      if (e.burrow !== was) burst(e.x, e.y, '#7a5a3a', e.burrow ? 12 : 16, e.burrow ? 90 : 130);
+      if (e.burrow) { e.dirtT = (e.dirtT || 0) - dt; if (e.dirtT <= 0) { e.dirtT = 0.3; burst(e.x, e.y, '#6b4e33', 2, 40); } }
+    }
     const tt = e.fly ? GRASS : terr(tileOf(e.x), tileOf(e.y));
-    const sp = e.speed * (e.slowT > 0 ? 0.45 : 1) * (tt === WATER ? (e.swim ? SWIM_FAST : WATER_SLOW) : tt === ROCK ? CLIMB_SLOW : 1) * dt;
+    const sp = e.speed * (e.slowT > 0 ? 0.45 : 1) * (e.burrow ? DIG_SLOW : 1) * (tt === WATER ? (e.swim ? SWIM_FAST : WATER_SLOW) : tt === ROCK ? CLIMB_SLOW : 1) * dt;
     let tx = null, ty = null, attack = null;
     // Who ground enemies get distracted by: a Knight within taunt range pulls every one of them in;
     // otherwise the nearest hero or soldier within 2.5 tiles. Large enemies only bother with a
     // Ranger or Mage they can already hit, so a ranged hero can kite them without dragging them around.
     let foe = null, pd = Infinity, taunted = false;
-    if (!e.fly) {
+    if (!e.fly && !e.burrow) {
       for (const h of players) if (h.alive && h.heroType === 'knight') {
         const d = Math.hypot(h.x - e.x, h.y - e.y); if (d < tauntR(h) && d < pd) { pd = d; foe = h; taunted = true; } }
       if (!foe) {
@@ -1760,11 +1885,11 @@ function update(dt) {
       const cx = tileOf(e.x), cy = tileOf(e.y);
       const here = inB(cx, cy) && grid[cy][cx];
       if (rectDist(e.x, e.y, coreRect.x, coreRect.y, coreRect.w, coreRect.h) < e.r + 2) attack = 'core';
-      else if (here) attack = here;
+      else if (here && !e.dig) attack = here;
       else {
         const n = nextStep(cx, cy, modeOf(e));
         if (n) {
-          const b = grid[n[1]][n[0]];
+          const b = !e.dig && grid[n[1]][n[0]];
           if (b && rectDist(e.x, e.y, n[0] * T, n[1] * T, T, T) < e.r + 2) attack = b;
           else { tx = n[0] * T + T / 2; ty = n[1] * T + T / 2; }
         }
@@ -1813,7 +1938,7 @@ function update(dt) {
   // Separation
   for (let i = 0; i < enemies.length; i++) for (let j = i + 1; j < enemies.length; j++) {
     const a = enemies[i], b = enemies[j];
-    if (a.fly !== b.fly) continue;
+    if (a.fly !== b.fly || !!a.burrow !== !!b.burrow) continue;
     const dx = b.x - a.x, dy = b.y - a.y, dd = dx * dx + dy * dy, rr = (a.r + b.r) * 0.9;
     if (dd < rr * rr && dd > 0.01) {
       const l = Math.sqrt(dd), push = (rr - l) / 2;
@@ -1823,7 +1948,7 @@ function update(dt) {
 
   // Heroes and ground enemies can't overlap: push the enemy, or the hero if the enemy is pinned
   for (const h of players) if (h.alive) for (const e of enemies) {
-    if (e.fly || e.dead) continue;
+    if (e.fly || untouchable(e)) continue;
     const dx = e.x - h.x, dy = e.y - h.y, rr = e.r + h.r, dd = dx * dx + dy * dy;
     if (dd >= rr * rr || dd < 0.01) continue;
     const l = Math.sqrt(dd), push = rr - l, ux = dx / l, uy = dy / l;
@@ -1842,13 +1967,14 @@ function update(dt) {
   for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
     const b = grid[y][x]; if (!b) continue;
     b.flash = Math.max(0, b.flash - dt); b.fireT = Math.max(0, (b.fireT || 0) - dt);
-    const boost = engineerNear(x * T + T / 2, y * T + T / 2);   // an Engineer's aura speeds up construction and work
+    const pw = auraPowerAt(x * T + T / 2, y * T + T / 2), boost = pw >= 0;   // an Engineer's aura speeds up construction and work
+    const od = boost ? OVERDRIVE + POWER_PER * pw : 1;
     if (b.build > 0) { // under construction: blocks the path but doesn't work yet
-      b.build -= dt * (boost ? BUILD_BOOST : 1);
+      b.build -= dt * (boost ? BUILD_BOOST + BUILD_PER * pw : 1);
       if (b.build <= 0) { b.build = 0; burst(x * T + T / 2, y * T + T / 2, '#ffd84a', 10, 80); }
       continue;
     }
-    b.cd -= dt * (boost ? OVERDRIVE : 1);
+    b.cd -= dt * od;
     const px = x * T + T / 2, py = y * T + T / 2;
     if (b.cd > 0 || b.type === 'wall') continue;
     if (b.type === 'medic') {
@@ -1870,17 +1996,18 @@ function update(dt) {
       continue;
     }
     const range = stat(b, 'range') * T;
+    const eng = towerEngineer(px, py);
     if (b.type === 'frost') {
       let hit = false;
-      for (const e of enemies) if (!e.dead && d2(px, py, e.x, e.y) < range * range) { e.slowT = 1.6; hurt(e, stat(b, 'dmg')); hit = true; }
+      for (const e of enemies) if (!e.dead && d2(px, py, e.x, e.y) < range * range) { e.slowT = 1.6; hurt(e, stat(b, 'dmg'), null, eng); hit = true; }
       if (hit) { b.cd = stat(b, 'interval'); b.pulse = 0.4; b.pulseN = (b.pulseN || 0) + 1; }
       continue;
     }
     const tgt = nearestEnemy(px, py, range, b.type === 'arrow', true);
     if (!tgt) continue;
     b.cd = stat(b, 'interval'); b.aim = Math.atan2(tgt.y - py, tgt.x - px); b.fireT = 0.25;
-    if (b.type === 'arrow') projectiles.push({ kind: 'arrow', x: px, y: py, target: tgt, speed: 520, dmg: stat(b, 'dmg') });
-    else projectiles.push({ kind: 'shell', x: px, y: py, tx: tgt.x, ty: tgt.y, speed: 320, dmg: stat(b, 'dmg'), splash: DEFS.cannon.splash * T });
+    if (b.type === 'arrow') projectiles.push({ kind: 'arrow', x: px, y: py, target: tgt, speed: 520, dmg: stat(b, 'dmg'), eng });
+    else projectiles.push({ kind: 'shell', x: px, y: py, tx: tgt.x, ty: tgt.y, speed: 320, dmg: stat(b, 'dmg'), splash: DEFS.cannon.splash * T, eng });
   }
 
   // Projectiles
@@ -1893,10 +2020,11 @@ function update(dt) {
       const dx = p.tx - p.x, dy = p.ty - p.y, l = Math.hypot(dx, dy);
       if (l < p.speed * dt) {
         p.done = true; burst(p.tx, p.ty, '#f93', 16, 140);
-        for (const e of enemies) if (!e.fly && d2(p.tx, p.ty, e.x, e.y) < p.splash ** 2) hurt(e, p.dmg);
+        for (const e of enemies) if (!e.fly && d2(p.tx, p.ty, e.x, e.y) < p.splash ** 2) hurt(e, p.dmg, null, p.eng ?? null);
       } else { p.x += dx / l * p.speed * dt; p.y += dy / l * p.speed * dt; }
     } else {
       if (p.target.dead) { p.done = true; continue; }
+      if (p.target.burrow && !p.splash) { p.done = true; burst(p.x, p.y, '#7a5a3a', 3, 40); continue; }   // thunks into the dirt
       const dx = p.target.x - p.x, dy = p.target.y - p.y, l = Math.hypot(dx, dy);
       p.ang = Math.atan2(dy, dx);
       if (l < p.speed * dt + p.target.r) {
@@ -1905,7 +2033,7 @@ function update(dt) {
           for (const e of enemies) if (!e.dead && d2(p.target.x, p.target.y, e.x, e.y) < p.splash ** 2) hurt(e, p.dmg, p.src ?? null);
           burst(p.target.x, p.target.y, '#ff8a30', 16, 150); burst(p.target.x, p.target.y, '#ffe27a', 8, 90);
           addBlast(p.target.x, p.target.y, p.splash);
-        } else { hurt(p.target, p.dmg, p.src ?? null); burst(p.x, p.y, '#fff', 3, 60); }
+        } else { hurt(p.target, p.dmg, p.src ?? null, p.eng ?? null); burst(p.x, p.y, '#fff', 3, 60); }
       }
       else { p.x += dx / l * p.speed * dt; p.y += dy / l * p.speed * dt; }
     }
@@ -2503,6 +2631,30 @@ const SPRITES = {
     ctx.strokeStyle = '#0007'; ctx.lineWidth = 1.2; ctx.stroke();
     eyes(r * 0.5, r * 0.32, r * 0.2, '#ffd0a0', '#200');
   },
+  digger(e, c, gait, flat) {   // mole-like Burrower with big shovel claws
+    const r = e.r, dig = Math.sin(gait * 1.6);
+    feet(e, r, r * 0.5, r * 0.26, shade(e.color, -0.55), gait);
+    // stubby tail
+    ctx.strokeStyle = '#d9a59a'; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-r * 0.9, 0); ctx.lineTo(-r * 1.35, Math.sin(gait) * r * 0.2); ctx.stroke();
+    // shovel claws, scooping alternately (both strike forward on attack)
+    for (const s of [-1, 1]) {
+      const k = e.lunge ? r * 0.45 : (s > 0 ? dig : -dig) * r * 0.25;
+      ctx.save(); ctx.translate(r * 0.55 + k, s * r * 0.8); ctx.rotate(s * 0.35);
+      ctx.fillStyle = '#e8b4a8'; ctx.beginPath(); ctx.ellipse(0, 0, r * 0.42, r * 0.3, 0, 0, 6.28); ctx.fill();
+      ctx.fillStyle = '#f4ecd8';
+      for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(r * 0.3, i * r * 0.17 - r * 0.07); ctx.lineTo(r * 0.68, i * r * 0.2); ctx.lineTo(r * 0.3, i * r * 0.17 + r * 0.07); ctx.fill(); }
+      ctx.restore();
+    }
+    ctx.fillStyle = litGrad(r, c, e.face, flat); ctx.beginPath(); ctx.ellipse(0, 0, r * 1.05, r * 0.88, 0, 0, 6.28); ctx.fill();
+    ctx.strokeStyle = '#0007'; ctx.lineWidth = 1.2; ctx.stroke();
+    // dirt-caked mining helmet with a lamp
+    ctx.fillStyle = '#c9a23a'; ctx.beginPath(); ctx.arc(-r * 0.1, 0, r * 0.55, Math.PI * 0.5, Math.PI * 1.5); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff4b0'; circ(r * 0.05, 0, r * 0.16); ctx.fill();
+    // pink snout and squinting eyes
+    ctx.fillStyle = '#e89a9a'; circ(r * 0.95, 0, r * 0.22); ctx.fill();
+    ctx.fillStyle = '#200'; for (const s of [-1, 1]) { circ(r * 0.55, s * r * 0.32, r * 0.09); ctx.fill(); }
+  },
   swimmer(e, c, gait, flat) {
     const r = e.r, wet = terr(tileOf(e.x), tileOf(e.y)) === WATER;
     if (wet) { // submerged: only a fin and ripples show above the surface
@@ -2628,6 +2780,25 @@ function drawEnemy(e) {
       ctx.beginPath(); ctx.moveTo(px, py - 3); ctx.lineTo(px + 1.5, py); ctx.lineTo(px, py + 3); ctx.lineTo(px - 1.5, py); ctx.fill(); }
   }
   if (e.hp < e.maxHp) bar(e.x - e.r, e.y - e.r - 8 - lift, e.r * 2, 3, e.hp / e.maxHp, '#f55');
+}
+
+// A Burrower underground: a churning mound of earth (drawn beneath buildings) and cracks that show through on top
+function drawTunnel(e) {
+  const r = e.r * 1.2, w = e.wob;
+  ctx.fillStyle = 'rgba(60,40,22,0.55)'; ctx.beginPath(); ctx.ellipse(e.x, e.y, r * 1.25, r, e.face, 0, 6.28); ctx.fill();
+  ctx.fillStyle = '#7a5a3a';
+  for (let i = 0; i < 6; i++) { const a = i * 1.047 + w * 0.3, d = r * (0.45 + 0.25 * Math.sin(w + i));
+    circ(e.x + Math.cos(a) * d, e.y + Math.sin(a) * d, 2 + (i % 3)); ctx.fill(); }
+}
+function drawTunnelCracks(e) {
+  const r = e.r * 1.1, p = 0.5 + 0.5 * Math.sin(e.wob * 0.7);
+  ctx.strokeStyle = `rgba(40,25,12,${0.45 + 0.3 * p})`; ctx.lineWidth = 1.4; ctx.beginPath();
+  for (let i = 0; i < 5; i++) { const a = i * 1.257 + e.id, x1 = e.x + Math.cos(a) * r * 0.3, y1 = e.y + Math.sin(a) * r * 0.3;
+    ctx.moveTo(x1, y1); ctx.lineTo(e.x + Math.cos(a + 0.3) * r * 0.75, e.y + Math.sin(a + 0.3) * r * 0.75);
+    ctx.lineTo(e.x + Math.cos(a - 0.1) * r * 1.1, e.y + Math.sin(a - 0.1) * r * 1.1); }
+  ctx.stroke();
+  ctx.setLineDash([3, 3]); ctx.strokeStyle = `rgba(255,200,140,${0.35 + 0.3 * p})`; circ(e.x, e.y, r * 1.2); ctx.stroke(); ctx.setLineDash([]);
+  if (e.hp < e.maxHp) bar(e.x - e.r, e.y - e.r - 8, e.r * 2, 3, e.hp / e.maxHp, '#f55');
 }
 
 function drawFlag(x, y, alpha, medic = false) {
@@ -2872,7 +3043,7 @@ function drawHeroRange() {
   const rings = hero.dagger
     ? [[daggerRange(), [7, 6], 0.55]]
     : [[heroRange(), [7, 6], 0.7]];
-  if (heroType === 'engineer') rings.push([OVERDRIVE_R * T, [3, 5], 0.45]);
+  if (heroType === 'engineer') rings.push([auraR(player), [3, 5], 0.45]);
   if (heroType === 'knight') rings.push([tauntR(player), [2, 6], 0.35]);
   ctx.save();
   for (const [rad, dash, k] of rings) {
@@ -2928,11 +3099,17 @@ function drawPings() {
 }
 
 // ---------- Hero select screen ----------
-function pickHero(k) { settings.hero = k; saveSettings(); startGame(); }
+// net.joinPick: a room code we're about to join; the hero screen is then picking who to join that game as
+function pickHero(k) { settings.hero = k; saveSettings(); heroScreenGo(); }
+function heroScreenGo() {
+  if (net.joinPick) { const code = net.joinPick; net.joinPick = null; gameState = 'coop'; joinGame(code, true); }
+  else startGame();
+}
+function heroScreenBack() { if (net.joinPick) { net.joinPick = null; gameState = 'coop'; } else gameState = 'menu'; }
 function heroDps(h) { return h.dmg * Math.min(h.targets, 2) / h.interval * (h.splash ? 1.6 : 1) + (h.dagger ? h.dagger.dmg / h.dagger.interval : 0); }
 function drawHeroSelect() {
   dimScreen(0.9);
-  bigTitle('CHOOSE YOUR HERO', 58, 38);
+  bigTitle(net.joinPick ? 'CHOOSE YOUR HERO TO JOIN' : 'CHOOSE YOUR HERO', 58, 38);
   const n = HERO_TYPES.length, t = performance.now() / 1000, cw = 228, ch = 540, gap = 14, x0 = W / 2 - (cw * n + gap * (n - 1)) / 2, y0 = 96;
   const maxOf = f => Math.max(...HERO_TYPES.map(k => f(HEROES[k])));
   const stats = [['Health', h => h.hp], ['Damage', heroDps], ['Range', h => h.dagger ? h.dagger.range : h.range], ['Speed', h => h.speed]];
@@ -2967,9 +3144,9 @@ function drawHeroSelect() {
     ctx.fillText(touchUI ? 'Tap to choose' : `Click or press ${i + 1}`, cx, y + ch - 10);
     uiButtons.push({ x, y, w: cw, h: ch, onClick: () => pickHero(k) });
   });
-  uiButton(W / 2 - 100, y0 + ch + 18, 200, 44, 'Back', () => { gameState = 'menu'; });
+  uiButton(W / 2 - 100, y0 + ch + 18, 200, 44, 'Back', heroScreenBack);
   ctx.font = '13px sans-serif'; ctx.fillStyle = '#8a93a3'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  if (!touchUI) ctx.fillText(`Enter plays as the ${HEROES[settings.hero].name} · Esc goes back`, W / 2, y0 + ch + 80);
+  if (!touchUI) ctx.fillText(`Enter ${net.joinPick ? 'joins' : 'plays'} as the ${HEROES[settings.hero].name} · Esc goes back`, W / 2, y0 + ch + 80);
 }
 function drawGhost() {
   if (!selected || !inMap() || !player.alive) return;
@@ -3034,7 +3211,7 @@ function drawHover() {
   const sellLine = (act, word) => sellArmed(b) ? `Right-click/X again to ${act} (${word}${sellValue(b)})` : `Right-click/X twice: ${act} (${word}${sellValue(b)})`;
   if (b.build > 0) lines.push(`Under construction… ${b.build.toFixed(1)}s`, sellLine('cancel', 'refund '));
   else {
-    lines.push(b.level < 3 ? `Click/E: upgrade (${upgradeCost(b)})` : 'Max level');
+    lines.push(b.level < maxLevel(b) ? `Click/E: upgrade (${upgradeCost(b)})` : 'Max level');
     lines.push(sellLine('sell', ''));
   }
   ctx.font = '12px sans-serif';
@@ -3151,6 +3328,11 @@ function drawHUDScaled() {
   else if (phase === 'build') { ctx.fillStyle = '#9f9'; ctx.fillText(touchUI ? `Wave in ${Math.ceil(phaseT)}s · ▶ Ready +${Math.ceil(phaseT)} gold`
       : `Next wave in ${Math.ceil(phaseT)}s  —  SPACE to start now (+${Math.ceil(phaseT)} gold)`, W - 12, 15); }
   else { ctx.fillStyle = '#f99'; ctx.fillText(`Enemies: ${enemies.length + queuedEnemies()}`, W - 12, 15); }
+  // The theme of the coming (or current) wave, under the timer, so you can prepare
+  const th = WAVE_THEMES[phase === 'build' ? nextTheme : waveTheme];
+  if (th) { ctx.font = 'bold 13px sans-serif'; ctx.fillStyle = '#000'; const lbl = (phase === 'build' ? 'Next: ' : '') + th.name;
+    const tx = settings.minimap ? MM_X - 10 : W - 12, ty = MM_Y + 8;   // beside the minimap, just under the top bar
+    ctx.textBaseline = 'middle'; ctx.fillText(lbl, tx + 1, ty + 1); ctx.fillStyle = th.color; ctx.fillText(lbl, tx, ty); ctx.font = 'bold 15px sans-serif'; }
 }
 const curSpeed = () => net.role ? 1 : settings.speed;
 const queuedEnemies = () => net.role === 'client' ? net.queued : spawnQueue.length;
@@ -3206,7 +3388,7 @@ function drawBarSlots() {
   ctx.fillText('HERO WEAPON', HERO_X + 2, H + 3);
   heroOrder().forEach((k, i) => {
     const u = HERO_UPS[k], x = HERO_X + i * HERO_W, y = H + 14, w = HERO_W - 4, h = BAR - 20;
-    const lvl = heroUp[k], maxed = lvl >= u.max, c = heroCost(k), afford = !maxed && funds(player) >= c;
+    const lvl = heroUp[k], maxed = lvl >= u.max, c = heroCost(k), afford = !maxed && heroFunds(player) >= c;
     const hover = mouse.sy >= y && mouse.sy <= y + h && mouse.sx >= x && mouse.sx <= x + w;
     ctx.fillStyle = hover && afford ? '#34405a' : '#262c36'; ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = afford ? u.color : '#3a424f'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, w, h);
@@ -3314,7 +3496,7 @@ const BUILD_HELP = {
   cannon: 'Slow shells that explode, damaging every ground enemy in the blast.',
   frost: 'Pulses frost that slows every nearby enemy (flyers too) and chips at them.',
   mine: 'Produces gold every few seconds. Upgrades raise the income.',
-  barracks: 'Trains soldiers (3 at a time, +1 per level) who guard their rally point and fight ground enemies.',
+  barracks: 'Trains soldiers (3 at a time, +1 per level, up to level 5) who guard their rally point and fight ground enemies.',
   medic: 'Trains a medic (+1 per level) who repairs buildings and the core and heals soldiers and your hero within 7 tiles of its work spot. Press R on the tent to move that spot.',
   bridge: 'Built on water only. A bridge always spans the river bank to bank (20 gold per tile, up to 6), and both ends must land on open ground — not trees or mountains. Everything crosses a bridge at full speed. Right-click (or X) a bridge near your hero to destroy it — no refund. Cut a crossing to force enemies to wade or detour.',
 };
@@ -3322,11 +3504,11 @@ function helpContent(tab) {
   if (tab === 0 && touchUI) return helpContent('basics').map(r => r[0] === 'Camera' ? ['Touch controls', TOUCH_HELP] : r);
   if (tab === 0 || tab === 'basics') return [
     ['Goal', 'Monsters pour in from every edge of the map. Protect the crystal core in the middle. You lose if the core is destroyed — or if your hero dies (in co-op: if every hero is down at once).'],
-    ['Heroes', 'Pick a hero before each game. Ranger: fast, long-range crossbow. Knight: very tough; ground enemies within 3 tiles drop what they are doing to fight him, the sword hits every enemy in reach in the half-circle in front of him and knocks it back (he turns slower than the others, so his back is his weak side), and throwing daggers (the shortest range of any hero) reach a little further. Chops four times as fast. Large enemies ignore a Ranger or Mage unless they are close enough to hit them. Mage: longest reach, exploding fireballs, but fragile. Engineer: weak rivet gun, but buildings within 3 tiles of him work 40% faster, construction near him finishes 3× faster, and he repairs three times as fast.'],
+    ['Heroes', 'Pick a hero before each game. Ranger: fast, long-range crossbow. Knight: very tough; ground enemies within 3 tiles drop what they are doing to fight him, the sword hits every enemy in reach in the half-circle in front of him and knocks it back (he turns slower than the others, so his back is his weak side), and throwing daggers (the shortest range of any hero) reach a little further. Chops four times as fast. Large enemies ignore a Ranger or Mage unless they are close enough to hit them. Mage: longest reach, exploding fireballs, but fragile. Engineer: weak rivet gun, but buildings within 3 tiles of him (up to 5 with Aura upgrades) work 40% faster (up to 90% with Aura Power), construction near him finishes 3× faster, and he repairs three times as fast (both up to 5× with Aura Power). Towers (Arrow, Cannon, Frost) inside his aura pay him 30% (up to 55%) of the gold from the damage they deal.'],
     ['Your hero', 'WASD moves, or left-click open ground to walk there (click a tree to walk over and chop it) — while walking, rings show your attack range. Your hero attacks the nearest enemies automatically and slowly regenerates health out of combat. Standing near your buildings repairs them; standing beside the core slowly repairs it.'],
-    ['Building', 'Choose a building with its key (1–6, M, B) or by clicking the bottom bar, then click a tile inside the dashed circle around your hero that it can see — trees and mountains block the view. Drag to paint walls or bridges. New buildings take 1 second to construct and do nothing until finished (right-click a construction site twice to cancel for a full refund). Click a building (or press E) to upgrade it, up to level 3. Right-click (or X) it twice within 2 seconds to sell it. Q / Esc deselects.'],
+    ['Building', 'Choose a building with its key (1–6, M, B) or by clicking the bottom bar, then click a tile inside the dashed circle around your hero that it can see — trees and mountains block the view. Drag to paint walls or bridges. New buildings take 1 second to construct and do nothing until finished (right-click a construction site twice to cancel for a full refund). Click a building (or press E) to upgrade it, up to level 3 (Barracks up to level 5). Right-click (or X) it twice within 2 seconds to sell it. Q / Esc deselects.'],
     ['Waves & gold', 'Enemies drop gold. Between waves there is a short break — press SPACE to start the next wave early and pocket the remaining seconds as gold. Clearing a wave pays a bonus.'],
-    ['Hero weapon', 'Spend gold on Damage (7), Fire Rate (8), Range (9) and Multishot (0) using the keys or the buttons on the right of the bar. The Knight has his own upgrades instead of Range and Multishot: Armor (9) cuts the damage he takes by 10% per level, and Taunt (0) pulls enemies in from 1 tile further away per level.'],
+    ['Hero weapon', 'Spend gold on Damage (7), Fire Rate (8), Range (9) and Multishot (0) using the keys or the buttons on the right of the bar. The Knight has his own upgrades instead of Range and Multishot: Armor (9) cuts the damage he takes by 10% per level, and Taunt (0) pulls enemies in from 1 tile further away per level. The Engineer has Aura Power (9) and Aura Size (0) instead: Power, per level, makes buildings in his aura work 10% faster (on top of the base 40%), construction near him and his repairs 0.4× faster (3× up to 5×) and raises his tower gold cut by 5% (30% up to 55%), and Size widens the aura by half a tile per level.'],
     ['Camera', 'Arrow keys, middle-mouse drag, or clicking the minimap scrolls the view. C recenters on your hero. P or Esc opens the pause menu (Esc first cancels a build or rally selection). The ❚❚ button in the top bar freezes the action while you look around and build; the Speed button (or [ and ]) changes game speed up to 4× — [ at 1× pauses, ] resumes.'],
   ];
   if (tab === 1) return ORDER.map(k => [`${DEFS[k].name}  ·  key ${DEFS[k].key}  ·  ${DEFS[k].cost} gold`, BUILD_HELP[k]]);
@@ -3336,6 +3518,7 @@ function helpContent(tab) {
     ['Medics', 'Trained at a Medic Tent. Each medic picks the most urgent job within 7 tiles of its work spot (the tent, unless you move it): damaged buildings, the core, wounded soldiers or your hero. To move the work spot, hover the tent, press R, then click — new medics go there too. Hover a tent to see its work area. Medics don\'t fight, and enemies will attack them.'],
   ];
   if (tab === 3) return [
+    ['Wave types', 'From wave 3 many waves have a theme: a Grunt horde, Runner rush, Fish wave (Swimmers), Sky raid, Splitter swarm, Brute squad, Mountain climbers, Burrower wave or a Chaos wave of the tricky types. Most of the wave is that type, and the rest is the usual mix. The next wave\'s theme is shown at the top right during the build phase, so you can prepare.'],
     ['Grunt', 'The basic attacker.'],
     ['Runner  (wave 2+)', 'Fast and fragile.'],
     ['Flyer  (wave 3+)', 'Flies straight over walls, mountains and rivers to the core. Only arrow towers, frost towers and your hero can hit it.'],
@@ -3343,13 +3526,14 @@ function helpContent(tab) {
     ['Brute  (wave 4+)', 'Slow and very tough, and smashes buildings hard.'],
     ['Swimmer  (wave 4+)', 'Sluggish on land but races down rivers, and takes half damage while underwater. Guard your riverbanks.'],
     ['Climber  (wave 5+)', 'Scrambles straight over mountains instead of going around — your chokepoints won\'t stop it.'],
+    ['Burrower  (wave 6+)', 'Tunnels under walls and towers instead of breaking them, popping up on the other side. Underground it can only be hurt by splash: cannon shells, frost pulses and fireballs. Shoot it in the open between your buildings.'],
     ['Mother Splitter  (wave 7+)', 'A huge, tough slime that bursts into three Splitters, which each burst into Splitlings.'],
     ['Boss  (every 5th wave)', 'Huge health and a crushing hit. Winds up a Ground Slam (red circle) that hits everything around it — get out! Calls a few minions at 60% and 30% health, and goes into a rage below 35% health: faster and hitting harder.'],
     ['Siege Golem  (wave 6, then every 5 waves)', 'Stops 5 tiles from your buildings and lobs artillery at them — towers first. Below 35% health it overheats: faster volleys of three shells. Level-1 towers can\'t reach it: upgrade, send soldiers, or charge it with your hero. Red circles show where shells will land.'],
   ];
   if (tab === 5) return [
-    ['Playing together', `Up to ${MAX_PLAYERS} players online. Choose Co-op on the main menu: one player hosts, and the others pick that game from the Open Games list (or type its 5-letter room code). You can join a game that is already under way: you arrive at the core with 50 gold, and if you left earlier, joining again with the same name gives you back your hero and upgrades. The host picks the difficulty and map, and controls pause and game speed. More heroes means more and tougher monsters.`],
-    ['Your wallet and the treasury', 'When a monster dies, its gold is split by how much damage each hero dealt and goes into their wallets. The share earned by towers and soldiers, wave-clear bonuses and the early-start bonus go to the shared treasury. Gold Mines pay every wallet the same amount. Spending takes from your wallet first, then from the treasury.'],
+    ['Playing together', `Up to ${MAX_PLAYERS} players online. Choose Co-op on the main menu: one player hosts, and the others pick that game from the Open Games list (or type its 5-letter room code). You can join a game that is already under way: you arrive at the core with 50 gold, and you choose your hero before joining. If you left earlier, joining again with the same name and hero gives you back your upgrades (pick a different hero and the gold you spent on upgrades is refunded to your wallet). The host picks the difficulty and map, and controls pause and game speed. More heroes means more and tougher monsters.`],
+    ['Your wallet and the treasury', 'When a monster dies, its gold is split by how much damage each hero dealt and goes into their wallets. The share earned by towers and soldiers, wave-clear bonuses and the early-start bonus go to the shared treasury. Gold Mines pay every wallet the same amount. Buildings take from your wallet first, then from the treasury. Hero upgrades can only be paid from your own wallet.'],
     ['Buildings', 'You build within range of your own hero. Anyone can sell any building (the refund goes to whoever sells it) or pay to upgrade it; only the player who built a Barracks or Medic Tent can move its soldiers and medics. The coloured corner shows who built it.'],
     ['Downed heroes', 'A hero at 0 health is downed, not dead. Stand next to them for 2 seconds to revive them at half health, or they respawn at the core after a while. The game is lost if the core falls or every hero is down at once.'],
     ['Teamwork', 'SPACE marks you ready: the next wave starts early once everyone is ready. G gives 25 gold to the nearest teammate (or click a name in the team list, top left). V drops a "Help here!" ping on the map; Shift+V drops a "Danger!" ping. If someone leaves, their wallet goes to the treasury and their buildings stay.'],
@@ -3414,9 +3598,11 @@ function draw() {
   drawMap();
   drawCore();
   { const [x0, y0, x1, y1] = viewTiles();
+    for (const e of enemies) if (e.burrow && onScreen(e.x, e.y)) drawTunnel(e);   // tunnels run beneath the buildings
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (grid[y][x]) drawBuilding(grid[y][x]); }
   drawGhost();
-  for (const e of enemies) if (!e.fly && onScreen(e.x, e.y)) drawEnemy(e);
+  for (const e of enemies) if (e.burrow && onScreen(e.x, e.y)) drawTunnelCracks(e);
+  for (const e of enemies) if (!e.fly && !e.burrow && onScreen(e.x, e.y)) drawEnemy(e);
   for (const u of soldiers) if (onScreen(u.x, u.y, 200)) drawSoldier(u);
   for (const h of players) if (h.id !== me) { bindP(h); drawPlayer(); drawWork(); }
   bindLocal(); drawPlayer(); drawWork();   // your own hero is drawn on top
@@ -3656,11 +3842,15 @@ function hostOnData(conn, d) {
     let color = 0; while (usedColors.has(color)) color++;
     const id = old ? old.id : Math.max(0, ...net.lobby.map(r => r.id), ...players.map(q => q.id), ...Object.values(departed).map(o => o.id)) + 1;
     conn.pid = id; net.conns.push(conn);
-    const entry = { id, name, hero: old ? old.heroType : hero, color };
+    const entry = { id, name, hero, color };   // a returning player may pick a different hero this time
     net.lobby.push(entry);
     if (net.inGame) {   // joining (or coming back to) a game in progress
       const p = makePlayer(id, name, entry.hero, color); p.remote = true;
-      if (old) { p.heroUp = old.heroUp; p.stats = old.stats; delete departed[name]; }
+      if (old) {
+        p.stats = old.stats; delete departed[name];
+        if (old.heroType === hero) p.heroUp = old.heroUp;
+        else p.wallet = upgradeSpend(old.heroUp);   // switched hero: the old upgrades don't carry over, so their gold comes back
+      }
       else p.wallet = 50;   // the same starting purse everyone got when the game began
       players.push(p);
       sendTo(conn, initMsg(id));
@@ -3720,16 +3910,16 @@ function initMsg(id) {
 // full = everything (for a newly joined client). Otherwise only what clients don't have yet: new enemies' type and
 // max HP, the full building list only when buildings changed, walls only when their HP changed.
 function makeSnap(full) {
-  const s = { t: 's', tr: treasury, w: wave, ph: phase === 'build' ? 0 : 1, pt: r1(phaseT), q: spawnQueue.length, k: kills,
+  const s = { t: 's', tr: treasury, w: wave, ph: phase === 'build' ? 0 : 1, pt: r1(phaseT), q: spawnQueue.length, k: kills, wt: waveTheme, nt: nextTheme,
     co: [Math.ceil(core.hp), core.maxHp, r2(core.flash || 0)], sp: speedPaused ? 1 : 0, spd: curSpeed(),
     hm: gameState === 'play' || gameState === 'over' ? 0 : 1, go: gameState === 'over' ? lossReason : 0 };
   s.P = players.map(p => [p.id, r1(p.x), r1(p.y), Math.ceil(p.hp), p.maxHp, p.alive ? 1 : 0, r2(p.aim || 0), p.moving ? 1 : 0, r1(p.walk || 0),
     r2(p.moveAng || 0), r2(p.fireT || 0), r2(p.throwT || 0), r2(p.flash || 0), p.wallet, p.ready ? 1 : 0, r1(p.respawnT), r2(p.reviveT),
-    [p.heroUp.dmg, p.heroUp.rate, p.heroUp.range, p.heroUp.multi, p.heroUp.armor || 0, p.heroUp.taunt || 0],
+    [p.heroUp.dmg, p.heroUp.rate, p.heroUp.range, p.heroUp.multi, p.heroUp.armor || 0, p.heroUp.taunt || 0, p.heroUp.aura || 0, p.heroUp.power || 0],
     p.work ? [p.work.tx, p.work.ty, r2(p.work.t), p.work.need, p.work.kind === 'tree' ? 0 : 1] : 0,
     p.name, p.heroType, p.colorI, [p.stats.kills, Math.round(p.stats.dmg), p.stats.gold, p.stats.built, p.stats.revives], p.respawned || 0]);
   s.E = enemies.map(e => {
-    const a = [e.id, Math.round(e.x), Math.round(e.y), Math.ceil(e.hp), r1(e.face), (e.slowT > 0 ? 1 : 0) | (e.hitT > 0 ? 2 : 0) | (e.lunge ? 4 : 0),
+    const a = [e.id, Math.round(e.x), Math.round(e.y), Math.ceil(e.hp), r1(e.face), (e.slowT > 0 ? 1 : 0) | (e.hitT > 0 ? 2 : 0) | (e.lunge ? 4 : 0) | (e.burrow ? 8 : 0),
       full || !e.sent ? [ETK.indexOf(e.type), Math.round(e.maxHp)] : 0];
     if (e.siege) a.push(r2(e.aim || 0), r2(e.recoil || 0), r2(e.shootT || 0), e.rage ? 1 : 0);
     else if (e.type === 'boss') a.push(r2(e.wind || 0), e.rage ? 1 : 0);
@@ -3778,10 +3968,13 @@ function netTick(dt) {
 }
 
 // ----- Client -----
-async function joinGame(pick) {
+async function joinGame(pick, picked = false) {
   const code = (typeof pick === 'string' ? pick : net.codeIn).toUpperCase();
   if (code.length !== 5) { net.status = 'Enter the 5-letter room code first.'; return; }
   if (net.busy || net.role) return;
+  // A game already under way skips the lobby, so choose a hero first. Codes we can't see in the list might be running too.
+  const listed = net.games.find(g => g.code === code);
+  if (!picked && (!listed || listed.ig)) { net.joinPick = code; net.status = ''; gameState = 'heroes'; return; }
   stopScan();
   net.busy = true; net.status = `Looking for room ${code}…`;
   try { await loadPeer(); } catch (e) { net.status = e.message; net.busy = false; return; }
@@ -3895,7 +4088,7 @@ function clientInit(d) {
   snapCamera();
 }
 function applySnap(s) {
-  treasury = s.tr; wave = s.w; phase = s.ph ? 'wave' : 'build'; phaseT = s.pt; net.queued = s.q; kills = s.k;
+  treasury = s.tr; wave = s.w; phase = s.ph ? 'wave' : 'build'; phaseT = s.pt; net.queued = s.q; kills = s.k; waveTheme = s.wt || 'mixed'; nextTheme = s.nt || 'mixed';
   core.hp = s.co[0]; core.maxHp = s.co[1]; if (s.co[2]) core.flash = s.co[2];
   speedPaused = !!s.sp; net.hostSpeed = s.spd; net.hostMenu = s.hm;
   // Heroes. Our own hero moves locally; it only jumps to the host's position after respawning, while downed, or if far off.
@@ -3906,7 +4099,7 @@ function applySnap(s) {
     let p = oldP.get(id);
     if (!p || p.heroType !== type) { p = makePlayer(id, name, type, colorI); p.x = x; p.y = y; p.rsp = rsp; }
     Object.assign(p, { name, hp, maxHp, alive: !!alive, wallet, ready: !!ready, respawnT, reviveT, fireT, throwT, aim, flash: Math.max(p.flash || 0, flash) });
-    p.heroUp = { dmg: up[0], rate: up[1], range: up[2], multi: up[3], armor: up[4] || 0, taunt: up[5] || 0 };
+    p.heroUp = { dmg: up[0], rate: up[1], range: up[2], multi: up[3], armor: up[4] || 0, taunt: up[5] || 0, aura: up[6] || 0, power: up[7] || 0 };
     p.work = wk ? { tx: wk[0], ty: wk[1], t: wk[2], need: wk[3], kind: wk[4] ? 'bridge' : 'tree' } : null;
     p.stats = { kills: st[0], dmg: st[1], gold: st[2], built: st[3], revives: st[4] };
     if (id === me) {
@@ -3927,7 +4120,7 @@ function applySnap(s) {
     }
     if (a[6]) e.maxHp = a[6][1];
     e.nx = a[1]; e.ny = a[2]; e.hp = a[3]; e.face = a[4];
-    e.slowT = a[5] & 1 ? 1 : 0; if (a[5] & 2) e.hitT = 0.09; if (a[5] & 4) e.lunge = 0.12;
+    e.slowT = a[5] & 1 ? 1 : 0; if (a[5] & 2) e.hitT = 0.09; if (a[5] & 4) e.lunge = 0.12; e.burrow = !!(a[5] & 8);
     if (e.siege) { if (a.length > 7) { e.aim = a[7]; e.recoil = a[8]; e.shootT = a[9]; e.rage = a[10] || 0; } }
     else if (e.type === 'boss' && a.length > 7) { e.wind = a[7]; e.rage = a[8]; }
     enemies.push(e);
@@ -4476,7 +4669,7 @@ function touchFrame() {
 const card = document.getElementById('card');
 let cardHtmlNow = '', cardAct = null;
 function cardHtml(b) {
-  const d = DEFS[b.type], L = b.level, max = L >= 3, busy = b.build > 0;
+  const d = DEFS[b.type], L = b.level, max = L >= maxLevel(b), busy = b.build > 0;
   const nb = { type: b.type, level: L + 1 }, nx = (k, f) => max ? null : f(stat(nb, k));
   const rows = [];
   const row = (label, now, next) => rows.push(`<div class="r">${label}<b>${now}${next != null && next !== now ? ` <i>→ ${next}</i>` : ''}</b></div>`);
@@ -4501,7 +4694,7 @@ function cardHtml(b) {
   else { const c = upgradeCost(b); acts.push(`<div class="act${funds(player) < c ? ' poor' : ''}" data-act="up">⬆ Upgrade<span>${c} gold</span></div>`); }
   acts.push(`<div class="act" data-act="sell">${busy ? '✕ Cancel' : '$ Sell'}<span>+${sellValue(b)}</span></div>`);
   if (!busy && (b.type === 'barracks' || b.type === 'medic')) acts.push(`<div class="act" data-act="squad">⚐ Move<span>${b.type === 'medic' ? 'medics' : 'squad'}</span></div>`);
-  return `<div class="h">${d.name} <span class="lv">Lv ${L}/3</span><div class="x" data-act="close">✕</div></div>${rows.join('')}<div class="acts">${acts.join('')}</div>`;
+  return `<div class="h">${d.name} <span class="lv">Lv ${L}/${maxLevel(b)}</span><div class="x" data-act="close">✕</div></div>${rows.join('')}<div class="acts">${acts.join('')}</div>`;
 }
 function updateCard(b) {
   if (!b) { if (card.style.display !== 'none') card.style.display = 'none'; cardHtmlNow = ''; return; }
@@ -4578,7 +4771,7 @@ function updateBuildBar() {
         it.pips.forEach((p, j) => { p.style.display = j < v.max ? '' : 'none'; });
       }
       const u = HERO_UPS[it.hk], lvl = heroUp[it.hk], maxed = lvl >= u.max, c = maxed ? 'MAX' : String(heroCost(it.hk));
-      cls += ' hero' + (maxed ? ' max' : gold < heroCost(it.hk) ? ' poor' : '');
+      cls += ' hero' + (maxed ? ' max' : heroFunds(player) < heroCost(it.hk) ? ' poor' : '');
       if (c !== it.cost) { it.cost = c; it.c.textContent = c; }
       if (lvl !== it.lvl) { it.lvl = lvl; it.pips.forEach((p, j) => { p.style.background = j < lvl ? u.color : ''; }); }
     }
