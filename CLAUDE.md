@@ -14,6 +14,21 @@ Tower Siege: a canvas tower-defense game with heroes and up to 8-player online c
 - `npm run apk`: runs sync, then builds the debug APK with `./gradlew assembleDebug` (output: `android/app/build/outputs/apk/debug/app-debug.apk`).
 - `npm run install-apk`: runs apk, then `adb install -r`.
 
+### Playing from outside the local network
+
+Run `npm run serve`. It needs `cloudflared` on `PATH` or at `~/.local/bin/cloudflared`; no Cloudflare account is required. After it starts, the script prints two addresses:
+
+- `LAN: http://<ip>:8080` works only for devices on the same network.
+- `Public URL: https://<random>.trycloudflare.com` works from anywhere. Share this one with remote players.
+
+Things to know:
+
+- The public URL changes on every run. A fixed address needs a named Cloudflare tunnel on a domain you own.
+- The URL works only while the script is running. Ctrl+C stops the tunnel, and also stops the web server if the script started it.
+- The script rebuilds `www/` on start. After editing `index.html`, restart it (or run `npm run build:web`) and reload the page.
+- The tunnel only serves the page. Co-op connects players peer-to-peer through the public PeerJS server, using PeerJS's default STUN/TURN servers, so you don't need to forward any ports. Each player opens the public URL, and one of them hosts a room.
+- Run it in the background when starting it from Claude Code, then report the printed public URL.
+
 The Android build needs JDK 21 and the Android SDK. `android/gradle.properties` pins `org.gradle.java.home` to a system JDK path. Set `JAVA_HOME` and `ANDROID_HOME` before you run the apk scripts.
 
 To check a change, run the game in a browser. Look at both desktop (mouse/keyboard) and touch layouts, and at both single-player and co-op if the change touches game state.
