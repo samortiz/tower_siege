@@ -252,10 +252,10 @@ const HEROES = {
   mage:   { name: 'Mage', color: '#9a5ae0', hp: 80, speed: 155, dmg: 16, interval: 0.7, range: 6.5, targets: 1, work: 1, kind: 'fire', splash: 1.1,
             tagline: 'Fire staff', perk: 'Longest reach. Fireballs explode and burn every enemy nearby — great against crowds. Fragile.' },
   engineer: { name: 'Engineer', color: '#e0912c', hp: 120, speed: 150, dmg: 7, interval: 0.32, range: 4.5, targets: 1, work: 1, kind: 'rivet', ups: ['dmg', 'rate', 'power', 'aura'],
-            tagline: 'Rivet gun and toolbox', perk: 'Weakest gun, but your buildings within 3 tiles of him work 40% faster, and buildings under construction near him finish 3× faster. Repairs buildings and the core three times as fast. Towers near him pay him 30% of their kill gold. Upgrades Aura Power (each level: buildings work +10% faster, construction and repairs +0.4× faster, +5% tower gold) and Aura Size (+½ tile per level, up to 5 tiles) instead of Range and Multishot.' },
+            tagline: 'Rivet gun and toolbox', perk: 'Weakest gun, but your buildings within 4 tiles of him work 40% faster, and buildings under construction near him finish 3× faster. Repairs buildings and the core three times as fast. Towers near him pay him 40% of their kill gold. Upgrades Aura Power (each level: buildings work +10% faster, construction and repairs +0.4× faster, +5% tower gold) and Aura Size (+½ tile per level, up to 6 tiles) instead of Range and Multishot.' },
 };
 const HERO_TYPES = ['ranger', 'knight', 'mage', 'engineer'];
-const OVERDRIVE_R = 3, OVERDRIVE = 1.4, BUILD_BOOST = 3, ENG_REPAIR = 3;   // Engineer: aura radius (tiles), building work speed and construction speed inside it, repair multiplier
+const OVERDRIVE_R = 4, OVERDRIVE = 1.4, BUILD_BOOST = 3, ENG_REPAIR = 3;   // Engineer: aura radius (tiles), building work speed and construction speed inside it, repair multiplier
 const AURA_PER = 0.5;   // Engineer's Aura upgrade: +½ tile of radius per level
 const auraR = h => (OVERDRIVE_R + AURA_PER * ((h.heroUp && h.heroUp.aura) || 0)) * T;
 // The nearest living Engineer whose aura covers this point (his id), or null. A tower he stands next to pays him a cut of its kill gold (see engCut).
@@ -264,8 +264,8 @@ function towerEngineer(px, py) {
   for (const h of players) if (h.alive && h.heroType === 'engineer') { const dd = d2(h.x, h.y, px, py); if (dd < auraR(h) ** 2 && dd < bd) { bd = dd; best = h.id; } }
   return best;
 }
-const ENG_TOWER_CUT = 0.3;
-// Aura Power also raises, per level: construction speed +0.4× (3× → 5×), repair speed +0.4× (3× → 5×), tower gold cut +5% (30% → 55%)
+const ENG_TOWER_CUT = 0.4;
+// Aura Power also raises, per level: construction speed +0.4× (3× → 5×), repair speed +0.4× (3× → 5×), tower gold cut +5% (40% → 65%)
 const BUILD_PER = 0.4, REPAIR_PER = 0.4, CUT_PER = 0.05;
 const engPower = h => (h && h.heroUp && h.heroUp.power) || 0;
 const engRepair = h => ENG_REPAIR + REPAIR_PER * engPower(h);
@@ -1853,8 +1853,8 @@ function update(dt) {
                  (e.climb && inB(ntx, nty) && !grid[nty][ntx] && !isCore(ntx, nty) && !mBlock('climb', ntx, nty));
       if (ok) { e.x = nx; e.y = ny; } else e.kbT = 0;
     }
-    if (e.dig) {   // Burrower: dives underground next to buildings and pops back up in the open
-      const was = !!e.burrow; e.burrow = underBuilding(e);
+    if (e.dig) {   // Burrower: dives underground next to buildings and pops back up in the open (or to attack, see below)
+      const was = !!e.burrow; e.burrow = !e.up && underBuilding(e);
       if (e.burrow !== was) burst(e.x, e.y, '#7a5a3a', e.burrow ? 12 : 16, e.burrow ? 90 : 130);
       if (e.burrow) { e.dirtT = (e.dirtT || 0) - dt; if (e.dirtT <= 0) { e.dirtT = 0.3; burst(e.x, e.y, '#6b4e33', 2, 40); } }
     }
@@ -1924,6 +1924,12 @@ function update(dt) {
       const dx = tx - e.x, dy = ty - e.y, l = Math.hypot(dx, dy) || 1;
       e.x += dx / l * Math.min(sp, l); e.y += dy / l * Math.min(sp, l);
       e.face = Math.atan2(dy, dx);
+    }
+    // A Burrower has to surface to attack (so it can be hit back), and needs a moment to climb out before its first blow.
+    // It stays up while it keeps attacking, and goes back under once it moves on.
+    if (e.dig) {
+      if (attack && !e.up) { e.up = true; e.burrow = false; e.atk = Math.max(e.atk, 0.6); burst(e.x, e.y, '#7a5a3a', 16, 130); }
+      else if (!attack && tx !== null) e.up = false;
     }
     if (attack && e.atk <= 0) {
       e.atk = e.rate;
@@ -3099,17 +3105,13 @@ function drawPings() {
 }
 
 // ---------- Hero select screen ----------
-// net.joinPick: a room code we're about to join; the hero screen is then picking who to join that game as
 function pickHero(k) { settings.hero = k; saveSettings(); heroScreenGo(); }
-function heroScreenGo() {
-  if (net.joinPick) { const code = net.joinPick; net.joinPick = null; gameState = 'coop'; joinGame(code, true); }
-  else startGame();
-}
-function heroScreenBack() { if (net.joinPick) { net.joinPick = null; gameState = 'coop'; } else gameState = 'menu'; }
+function heroScreenGo() { startGame(); }
+function heroScreenBack() { gameState = 'menu'; }
 function heroDps(h) { return h.dmg * Math.min(h.targets, 2) / h.interval * (h.splash ? 1.6 : 1) + (h.dagger ? h.dagger.dmg / h.dagger.interval : 0); }
 function drawHeroSelect() {
   dimScreen(0.9);
-  bigTitle(net.joinPick ? 'CHOOSE YOUR HERO TO JOIN' : 'CHOOSE YOUR HERO', 58, 38);
+  bigTitle('CHOOSE YOUR HERO', 58, 38);
   const n = HERO_TYPES.length, t = performance.now() / 1000, cw = 228, ch = 540, gap = 14, x0 = W / 2 - (cw * n + gap * (n - 1)) / 2, y0 = 96;
   const maxOf = f => Math.max(...HERO_TYPES.map(k => f(HEROES[k])));
   const stats = [['Health', h => h.hp], ['Damage', heroDps], ['Range', h => h.dagger ? h.dagger.range : h.range], ['Speed', h => h.speed]];
@@ -3146,7 +3148,7 @@ function drawHeroSelect() {
   });
   uiButton(W / 2 - 100, y0 + ch + 18, 200, 44, 'Back', heroScreenBack);
   ctx.font = '13px sans-serif'; ctx.fillStyle = '#8a93a3'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  if (!touchUI) ctx.fillText(`Enter ${net.joinPick ? 'joins' : 'plays'} as the ${HEROES[settings.hero].name} · Esc goes back`, W / 2, y0 + ch + 80);
+  if (!touchUI) ctx.fillText(`Enter plays as the ${HEROES[settings.hero].name} · Esc goes back`, W / 2, y0 + ch + 80);
 }
 function drawGhost() {
   if (!selected || !inMap() || !player.alive) return;
@@ -3423,13 +3425,14 @@ function bigTitle(t, y, size = 46, color = '#fff') {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `bold ${size}px sans-serif`;
   ctx.fillStyle = '#000'; ctx.fillText(t, W / 2 + 3, y + 3); ctx.fillStyle = color; ctx.fillText(t, W / 2, y);
 }
-function wrapText(text, x, y, maxW, lh) {
+// Draws text word-wrapped to maxW and returns the y below it; dry = true only measures
+function wrapText(text, x, y, maxW, lh, dry = false) {
   let line = '';
   for (const w of text.split(' ')) {
     const test = line ? line + ' ' + w : w;
-    if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, x, y); y += lh; line = w; } else line = test;
+    if (ctx.measureText(test).width > maxW && line) { if (!dry) ctx.fillText(line, x, y); y += lh; line = w; } else line = test;
   }
-  if (line) { ctx.fillText(line, x, y); y += lh; }
+  if (line) { if (!dry) ctx.fillText(line, x, y); y += lh; }
   return y;
 }
 function menuColumn(items, y0) { // stack of big centred buttons
@@ -3504,11 +3507,11 @@ function helpContent(tab) {
   if (tab === 0 && touchUI) return helpContent('basics').map(r => r[0] === 'Camera' ? ['Touch controls', TOUCH_HELP] : r);
   if (tab === 0 || tab === 'basics') return [
     ['Goal', 'Monsters pour in from every edge of the map. Protect the crystal core in the middle. You lose if the core is destroyed — or if your hero dies (in co-op: if every hero is down at once).'],
-    ['Heroes', 'Pick a hero before each game. Ranger: fast, long-range crossbow. Knight: very tough; ground enemies within 3 tiles drop what they are doing to fight him, the sword hits every enemy in reach in the half-circle in front of him and knocks it back (he turns slower than the others, so his back is his weak side), and throwing daggers (the shortest range of any hero) reach a little further. Chops four times as fast. Large enemies ignore a Ranger or Mage unless they are close enough to hit them. Mage: longest reach, exploding fireballs, but fragile. Engineer: weak rivet gun, but buildings within 3 tiles of him (up to 5 with Aura upgrades) work 40% faster (up to 90% with Aura Power), construction near him finishes 3× faster, and he repairs three times as fast (both up to 5× with Aura Power). Towers (Arrow, Cannon, Frost) inside his aura pay him 30% (up to 55%) of the gold from the damage they deal.'],
+    ['Heroes', 'Pick a hero before each game. Ranger: fast, long-range crossbow. Knight: very tough; ground enemies within 3 tiles drop what they are doing to fight him, the sword hits every enemy in reach in the half-circle in front of him and knocks it back (he turns slower than the others, so his back is his weak side), and throwing daggers (the shortest range of any hero) reach a little further. Chops four times as fast. Large enemies ignore a Ranger or Mage unless they are close enough to hit them. Mage: longest reach, exploding fireballs, but fragile. Engineer: weak rivet gun, but buildings within 4 tiles of him (up to 6 with Aura upgrades) work 40% faster (up to 90% with Aura Power), construction near him finishes 3× faster, and he repairs three times as fast (both up to 5× with Aura Power). Towers (Arrow, Cannon, Frost) inside his aura pay him 40% (up to 65%) of the gold from the damage they deal.'],
     ['Your hero', 'WASD moves, or left-click open ground to walk there (click a tree to walk over and chop it) — while walking, rings show your attack range. Your hero attacks the nearest enemies automatically and slowly regenerates health out of combat. Standing near your buildings repairs them; standing beside the core slowly repairs it.'],
     ['Building', 'Choose a building with its key (1–6, M, B) or by clicking the bottom bar, then click a tile inside the dashed circle around your hero that it can see — trees and mountains block the view. Drag to paint walls or bridges. New buildings take 1 second to construct and do nothing until finished (right-click a construction site twice to cancel for a full refund). Click a building (or press E) to upgrade it, up to level 3 (Barracks up to level 5). Right-click (or X) it twice within 2 seconds to sell it. Q / Esc deselects.'],
     ['Waves & gold', 'Enemies drop gold. Between waves there is a short break — press SPACE to start the next wave early and pocket the remaining seconds as gold. Clearing a wave pays a bonus.'],
-    ['Hero weapon', 'Spend gold on Damage (7), Fire Rate (8), Range (9) and Multishot (0) using the keys or the buttons on the right of the bar. The Knight has his own upgrades instead of Range and Multishot: Armor (9) cuts the damage he takes by 10% per level, and Taunt (0) pulls enemies in from 1 tile further away per level. The Engineer has Aura Power (9) and Aura Size (0) instead: Power, per level, makes buildings in his aura work 10% faster (on top of the base 40%), construction near him and his repairs 0.4× faster (3× up to 5×) and raises his tower gold cut by 5% (30% up to 55%), and Size widens the aura by half a tile per level.'],
+    ['Hero weapon', 'Spend gold on Damage (7), Fire Rate (8), Range (9) and Multishot (0) using the keys or the buttons on the right of the bar. The Knight has his own upgrades instead of Range and Multishot: Armor (9) cuts the damage he takes by 10% per level, and Taunt (0) pulls enemies in from 1 tile further away per level. The Engineer has Aura Power (9) and Aura Size (0) instead: Power, per level, makes buildings in his aura work 10% faster (on top of the base 40%), construction near him and his repairs 0.4× faster (3× up to 5×) and raises his tower gold cut by 5% (40% up to 65%), and Size widens the aura by half a tile per level.'],
     ['Camera', 'Arrow keys, middle-mouse drag, or clicking the minimap scrolls the view. C recenters on your hero. P or Esc opens the pause menu (Esc first cancels a build or rally selection). The ❚❚ button in the top bar freezes the action while you look around and build; the Speed button (or [ and ]) changes game speed up to 4× — [ at 1× pauses, ] resumes.'],
   ];
   if (tab === 1) return ORDER.map(k => [`${DEFS[k].name}  ·  key ${DEFS[k].key}  ·  ${DEFS[k].cost} gold`, BUILD_HELP[k]]);
@@ -3526,7 +3529,7 @@ function helpContent(tab) {
     ['Brute  (wave 4+)', 'Slow and very tough, and smashes buildings hard.'],
     ['Swimmer  (wave 4+)', 'Sluggish on land but races down rivers, and takes half damage while underwater. Guard your riverbanks.'],
     ['Climber  (wave 5+)', 'Scrambles straight over mountains instead of going around — your chokepoints won\'t stop it.'],
-    ['Burrower  (wave 6+)', 'Tunnels under walls and towers instead of breaking them, popping up on the other side. Underground it can only be hurt by splash: cannon shells, frost pulses and fireballs. Shoot it in the open between your buildings.'],
+    ['Burrower  (wave 6+)', 'Tunnels under walls and towers instead of breaking them, popping up on the other side. Underground it can only be hurt by splash: cannon shells, frost pulses and fireballs. It has to surface to attack, even right beside the core, so shoot it in the open between your buildings or while it attacks.'],
     ['Mother Splitter  (wave 7+)', 'A huge, tough slime that bursts into three Splitters, which each burst into Splitlings.'],
     ['Boss  (every 5th wave)', 'Huge health and a crushing hit. Winds up a Ground Slam (red circle) that hits everything around it — get out! Calls a few minions at 60% and 30% health, and goes into a rage below 35% health: faster and hitting harder.'],
     ['Siege Golem  (wave 6, then every 5 waves)', 'Stops 5 tiles from your buildings and lobs artillery at them — towers first. Below 35% health it overheats: faster volleys of three shells. Level-1 towers can\'t reach it: upgrade, send soldiers, or charge it with your hero. Red circles show where shells will land.'],
@@ -3968,13 +3971,11 @@ function netTick(dt) {
 }
 
 // ----- Client -----
-async function joinGame(pick, picked = false) {
+async function joinGame(pick) {
   const code = (typeof pick === 'string' ? pick : net.codeIn).toUpperCase();
   if (code.length !== 5) { net.status = 'Enter the 5-letter room code first.'; return; }
   if (net.busy || net.role) return;
-  // A game already under way skips the lobby, so choose a hero first. Codes we can't see in the list might be running too.
-  const listed = net.games.find(g => g.code === code);
-  if (!picked && (!listed || listed.ig)) { net.joinPick = code; net.status = ''; gameState = 'heroes'; return; }
+  // The hero comes from the picker on the co-op screen (a game already under way skips the lobby)
   stopScan();
   net.busy = true; net.status = `Looking for room ${code}…`;
   try { await loadPeer(); } catch (e) { net.status = e.message; net.busy = false; return; }
@@ -4220,9 +4221,18 @@ function textField(label, value, key, x, y, w, placeholder) {
   }
   uiButtons.push({ x, y, w, h, onClick: () => { net.focus = key; if (touchUI) openKb(); } });
 }
+function cancelConnect() { if (net.peer && !net.role) { try { net.peer.destroy(); } catch (e) {} net.peer = null; } net.busy = false; net.status = ''; }
 function drawCoop() {
   dimScreen(0.9);
   bigTitle('CO-OP', 70, 44);
+  if (net.busy) {   // connecting: don't show the form (typing into it now would change nothing)
+    ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffd84a';
+    ctx.fillText(net.status, W / 2, H / 2 - 40);
+    ctx.font = '15px sans-serif'; ctx.fillStyle = '#ccd';
+    ctx.fillText(`Playing as ${myName()} · ${HEROES[settings.hero].name}`, W / 2, H / 2);
+    uiButton(W / 2 - 100, H / 2 + 40, 200, 44, 'Cancel', cancelConnect);
+    return;
+  }
   ctx.font = '15px sans-serif'; ctx.fillStyle = '#ccd'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(`Defend the core together with up to ${MAX_PLAYERS - 1} friends over the internet.`, W / 2, 112);
   const x = W / 2 - 220, fw = 440;
@@ -4277,7 +4287,7 @@ function drawCoop() {
   ctx.font = '12px sans-serif'; ctx.fillStyle = '#6f7888'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('Players connect directly (WebRTC). A free public PeerJS server introduces the browsers and lists hosted games.', W / 2, 656);
   if (!touchUI) ctx.fillText('Tab switches fields · Enter hosts (or joins, from the code field) · Esc goes back', W / 2, 676);
-  uiButton(W / 2 - 100, H + BAR - 90, 200, 44, 'Back', () => { if (net.peer && !net.role) { try { net.peer.destroy(); } catch (e) {} net.peer = null; } stopScan(); net.busy = false; net.status = ''; gameState = 'menu'; });
+  uiButton(W / 2 - 100, H + BAR - 90, 200, 44, 'Back', () => { cancelConnect(); stopScan(); gameState = 'menu'; });
 }
 function coopKey(e, k) {
   if (gameState === 'lobby') {
@@ -4286,18 +4296,23 @@ function coopKey(e, k) {
     else { const i = '1234'.indexOf(k); if (i >= 0) pickLobbyHero(HERO_TYPES[i]); }
     return;
   }
+  if (net.busy) { if (k === 'escape') cancelConnect(); return; }
   if (k === 'escape') { stopScan(); gameState = 'menu'; return; }
   if (k === 'tab') { net.focus = net.focus === 'name' ? 'code' : 'name'; e.preventDefault(); return; }
   if (k === 'enter') { if (net.focus === 'code' && net.codeIn) joinGame(); else hostGame(); return; }
-  const edit = f => {
-    if (net.focus === 'name') { settings.name = filterName(f(settings.name || '')); saveSettings(); }
-    else net.codeIn = f(net.codeIn).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5);
-  };
+  if (net.focus === 'name') { editName(e, k); return; }
+  const edit = f => { net.codeIn = f(net.codeIn).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5); };
   if (k === 'backspace') { edit(v => v.slice(0, -1)); e.preventDefault(); }
   else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { edit(v => v + e.key); e.preventDefault(); }
 }
+function editName(e, k) {
+  const set = f => { settings.name = filterName(f(settings.name || '')); saveSettings(); };
+  if (k === 'backspace') { set(v => v.slice(0, -1)); e.preventDefault(); }
+  else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { set(v => v + e.key); e.preventDefault(); }
+}
+const nameFieldUp = () => gameState === 'coop';   // the name / room code fields only exist on the co-op screen
 addEventListener('paste', e => {
-  if (gameState !== 'coop') return;
+  if (!nameFieldUp()) return;
   const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
   if (net.focus === 'code') net.codeIn = t.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5);
   else { settings.name = filterName((settings.name || '') + t); saveSettings(); }
@@ -4335,9 +4350,11 @@ function drawLobby() {
   HERO_TYPES.forEach((k, i) => uiButton(x0 + i * 137, hy, 129, 40, HEROES[k].name, () => pickLobbyHero(k), { active: mine && mine.hero === k, size: 16 }));
   ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '12px sans-serif'; ctx.fillStyle = '#8a93a3';
   if (mine) wrapText(HEROES[mine.hero].perk, x0, hy + 48, rw, 15);
+  // Settings go below the longest perk, so switching heroes never moves them or runs text into them
+  const perkEnd = Math.max(...HERO_TYPES.map(k => wrapText(HEROES[k].perk, x0, hy + 48, rw, 15, true)));
   ctx.textBaseline = 'middle';
   // Game settings (host chooses)
-  const sy = 452, n = net.lobby.length;
+  const sy = Math.max(452, perkEnd + 30), n = net.lobby.length;
   ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.fillStyle = '#9aa3b2';
   if (host) {
     ctx.fillText('DIFFICULTY', x0, sy - 10);
@@ -4619,7 +4636,7 @@ function openKb() {
   try { kb.focus({ preventScroll: true }); } catch (e) { kb.focus(); }
 }
 kb.addEventListener('input', () => {
-  if (gameState !== 'coop') return;
+  if (!nameFieldUp()) return;
   if (net.focus === 'code') { net.codeIn = kb.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5); kb.value = net.codeIn; }
   else { settings.name = filterName(kb.value); saveSettings(); if (kb.value !== settings.name) kb.value = settings.name; }
 });
@@ -4635,7 +4652,7 @@ function touchFrame() {
     if (play && !zoomPicked) { zoomPicked = true; ZOOM = Math.max(1, Math.min(2.5, 24 / (T * viewScale))); snapCamera(); }   // tiles about 24px on screen
   }
   updateBuildBar();
-  if (gameState !== 'coop' && document.activeElement === kb) kb.blur();
+  if (!nameFieldUp() && document.activeElement === kb) kb.blur();
   if (touchMode === 'ping' && players.length < 2) touchMode = null;
   if (!play) { touchMode = null; if (stick.on) resetStick(); }
   if (touchMode && (selected || rallyMode)) touchMode = null;   // picking a building in the bar cancels a mode
