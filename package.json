@@ -2,8 +2,9 @@
   "name": "tower-siege",
   "version": "1.0.0",
   "private": true,
-  "description": "Tower Siege — web + Android (Capacitor) build",
+  "description": "Tower Siege \u2014 web + Android (Capacitor) build",
   "scripts": {
+    "serve": "bash scripts/serve.sh",
     "build:web": "node scripts/build-web.mjs",
     "sync": "npm run build:web && npx cap sync android",
     "apk": "npm run sync && cd android && ./gradlew assembleDebug",

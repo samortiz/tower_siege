@@ -52,6 +52,7 @@
   .bb.poor canvas, .bb.poor .n { opacity: 0.55; }
   .bb.max .c { color: #9f9; }
   .bb.press { background: #34405a; }
+  .bb.gone { display: none; }
   .bb .pips { display: flex; gap: 2px; }
   .bb .pips i { width: 6px; height: 5px; background: #3a424f; }
   .bb.hero .n { font-size: 10px; }
@@ -233,26 +234,50 @@ const HERO_UPS = {
   // Engineer only (in place of Range and Multishot)
   power: { name: 'Aura Power', key: '9', base: 50,  max: 5, color: '#ffb347' },
   aura:  { name: 'Aura Size', key: '0', base: 80,  max: 4, color: '#e0912c' },
+  // Ranger only (in place of Fire Rate and Range): level 1 unlocks frost arrows, level 2 fire arrows, level 3 explosive arrows
+  ammo:  { name: 'Arrows',    key: '9', base: 90,  max: 3, color: '#6fd3ff' },
 };
+// Ranger arrow types (heroUp.arrow is the one he is shooting; he owns types 0..heroUp.ammo). Z switches between owned types.
+// An enemy is either chilled or burning, never both: each one replaces the other, and wading into water puts out both.
+const ARROWS = [
+  { name: 'Regular', short: 'Std',  color: '#fff6a0', dmg: 1 },
+  { name: 'Frost',   short: 'Ice',  color: '#8fe0ff', dmg: 0.6 },   // weaker, but slows the target
+  { name: 'Fire',    short: 'Fire', color: '#ff8a30', dmg: 0.8 },   // weaker hit, then the target keeps burning
+  { name: 'Explosive', short: 'Boom', color: '#ffb347', dmg: 0.7, splash: 1 },   // bursts on impact, hurting everything within 1 tile (flyers too)
+];
+const ICE_T = 2.5, BURN_T = 3, BURN_DPS = 0.5;   // frost arrow slow (s); fire arrow burn (s) and its damage per second (× the arrow's full damage)
+const chill = (e, t) => { e.slowT = Math.max(e.slowT, t); e.burnT = 0; };
+const ignite = (e, dps, src) => { e.slowT = 0; e.burnT = BURN_T; e.burnDps = dps; e.burnSrc = src; };
 const HERO_ORDER = ['dmg', 'rate', 'range', 'multi'];
 const heroOrder = () => (hero && hero.ups) || HERO_ORDER;   // the four upgrade slots of the bound hero
 const ARMOR_PER = 0.1;   // Knight's Armor: 10% less damage taken per level
 const tauntR = h => (TAUNT_R + ((h.heroUp && h.heroUp.taunt) || 0)) * T;   // Knight's Taunt: +1 tile of pull per level
 const SLOT_W = 87, HERO_X = 12 + 8 * SLOT_W + 4, HERO_W = 69;
+const hasArrows = () => heroOrder().includes('ammo');
+// The hero slots share the bar's hero area: four upgrades, or for the Ranger three upgrades plus the arrow-type picker
+const heroW = () => Math.floor(HERO_W * 4 / (heroOrder().length + (hasArrows() ? 1 : 0)));
+// The Ranger's arrow-type picker (last hero slot): a 2×2 grid of arrow types; returns the cell under (sx, sy) in bar coordinates, or -1
+const arrowPick = () => { const x = HERO_X + heroOrder().length * heroW(), y = H + 14, w = heroW() - 4; return { x, y, w, h: BAR - 20, cw: (w - 10) / 2, ch: 15 }; };
+function arrowCellAt(sx, sy) {
+  if (!hasArrows()) return -1;
+  const r = arrowPick(), cx = Math.floor((sx - r.x - 4) / (r.cw + 2)), cy = Math.floor((sy - r.y - 17) / (r.ch + 2));
+  return sx >= r.x && sx <= r.x + r.w && cx >= 0 && cx < 2 && cy >= 0 && cy < 2 ? cy * 2 + cx : -1;
+}
 // Total gold paid for a set of hero upgrade levels (each level costs base × 1.7^level)
 const upgradeSpend = up => Object.keys(HERO_UPS).reduce((s, k) => { for (let i = 0; i < (up[k] || 0); i++) s += Math.round(HERO_UPS[k].base * Math.pow(1.7, i)); return s; }, 0);
 const heroCost = k => Math.round(HERO_UPS[k].base * Math.pow(1.7, heroUp[k]));
 // Hero types, picked on the hero select screen. dmg/interval/range are the base weapon; upgrades scale them.
 const HEROES = {
-  ranger: { name: 'Ranger', color: '#3a8ef0', hp: 100, speed: 170, dmg: 10, interval: 0.3, range: 5.5, targets: 1, work: 1, kind: 'bolt',
-            tagline: 'Hand crossbow', perk: 'Fastest on foot, with a quick, long-range crossbow. A good all-rounder.' },
+  ranger: { name: 'Ranger', color: '#3a8ef0', hp: 100, speed: 170, dmg: 10, interval: 0.26, range: 5.5, targets: 1, work: 1, kind: 'bolt',
+            ups: ['dmg', 'multi', 'ammo'],
+            tagline: 'Hand crossbow', perk: 'Fastest on foot, with a quick, long-range crossbow. A good all-rounder. Upgrades Damage, Multishot and Arrows: frost arrows slow, fire arrows set enemies burning, explosive arrows blast crowds — switch with Z.' },
   knight: { name: 'Knight', color: '#c0483f', hp: 190, speed: 145, dmg: 18, interval: 0.55, range: 2.2, targets: Infinity, work: 4, kind: 'melee', dmgUp: 2.9, ups: ['dmg', 'rate', 'armor', 'taunt'],
             dagger: { dmg: 9, interval: 0.9, range: 3.5 },
             tagline: 'Sword and throwing daggers', perk: 'Very tough. Taunts nearby enemies into fighting him instead of your buildings. The sword hits every enemy in reach and knocks them back; daggers (shortest range of any hero) pick off enemies a little further out. Chops four times as fast. Upgrades Armor and Taunt instead of Range and Multishot.' },
   mage:   { name: 'Mage', color: '#9a5ae0', hp: 80, speed: 155, dmg: 16, interval: 0.7, range: 6.5, targets: 1, work: 1, kind: 'fire', splash: 1.1,
             tagline: 'Fire staff', perk: 'Longest reach. Fireballs explode and burn every enemy nearby — great against crowds. Fragile.' },
   engineer: { name: 'Engineer', color: '#e0912c', hp: 120, speed: 150, dmg: 7, interval: 0.32, range: 4.5, targets: 1, work: 1, kind: 'rivet', ups: ['dmg', 'rate', 'power', 'aura'],
-            tagline: 'Rivet gun and toolbox', perk: 'Weakest gun, but your buildings within 4 tiles of him work 40% faster, and buildings under construction near him finish 3× faster. Repairs buildings and the core three times as fast. Towers near him pay him 40% of their kill gold. Upgrades Aura Power (each level: buildings work +10% faster, construction and repairs +0.4× faster, +5% tower gold) and Aura Size (+½ tile per level, up to 6 tiles) instead of Range and Multishot.' },
+            tagline: 'Rivet gun and toolbox', perk: 'Weak gun, but nearby buildings work 40% faster, build 3× faster and are repaired 3× faster. Heals nearby soldiers and teammates like a medic. Gets 90% back when selling buildings. Towers near him share their kill gold with him. Upgrades Aura Power and Aura Size instead of Range and Multishot.' },
 };
 const HERO_TYPES = ['ranger', 'knight', 'mage', 'engineer'];
 const OVERDRIVE_R = 4, OVERDRIVE = 1.4, BUILD_BOOST = 3, ENG_REPAIR = 3;   // Engineer: aura radius (tiles), building work speed and construction speed inside it, repair multiplier
@@ -270,6 +295,9 @@ const BUILD_PER = 0.4, REPAIR_PER = 0.4, CUT_PER = 0.05;
 const engPower = h => (h && h.heroUp && h.heroUp.power) || 0;
 const engRepair = h => ENG_REPAIR + REPAIR_PER * engPower(h);
 const engCut = h => ENG_TOWER_CUT + CUT_PER * engPower(h);
+// Engineer also patches up friendly units like a medic: the most hurt soldier, medic or other hero in reach, one at a time
+const ENG_HEAL = 15, HEAL_PER = 0.2, ENG_HEAL_R = 2.5 * 32;   // HP/s, +20% per Aura Power level, reach (px)
+const engHeal = h => ENG_HEAL * (1 + HEAL_PER * engPower(h));
 const POWER_PER = 0.1;   // Engineer's Aura Power upgrade: +10% building work speed per level (1.4× → 1.9×)
 // How much faster a building at this point works: the strongest covering Engineer's overdrive, or 1 with none nearby
 // The highest Aura Power level among living Engineers covering this point, or -1 when none is in range
@@ -300,7 +328,14 @@ function buyHero(k) {   // for the bound player (see bindP)
   if (!spendHero(player, c)) { floatText(player.x, player.y - 24, coop() ? `Need ${c} gold in your wallet` : `Need ${c} gold`, '#f77', 13, 1, to); return; }
   heroUp[k]++;
   burst(player.x, player.y, u.color, 16, 120);
-  floatText(player.x, player.y - 24, `${u.name} ${heroUp[k]}/${u.max}`, u.color, 14);
+  if (k === 'ammo') { heroUp.arrow = heroUp.ammo; floatText(player.x, player.y - 24, `${ARROWS[heroUp.arrow].name} arrows!  (Z to switch)`, ARROWS[heroUp.arrow].color, 14); }
+  else floatText(player.x, player.y - 24, `${u.name} ${heroUp[k]}/${u.max}`, u.color, 14);
+}
+function switchArrow(to) {   // for the bound player: pick an owned arrow type (or the next one round)
+  if (!heroOrder().includes('ammo') || !heroUp.ammo) return;
+  heroUp.arrow = Number.isInteger(to) && to >= 0 && to <= heroUp.ammo ? to : ((heroUp.arrow || 0) + 1) % (heroUp.ammo + 1);
+  const a = ARROWS[heroUp.arrow];
+  floatText(player.x, player.y - 24, `${a.name} arrows`, a.color, 13, 0.9);
 }
 
 const ETYPES = {
@@ -330,8 +365,8 @@ let announces = [], rallyMode = null, orderFx = null, soldiers = [], newEnemies 
 // ---------- Co-op: players, wallets and the shared treasury ----------
 // `players` holds every hero in the game; `me` is the id of the one this browser controls.
 // Most hero code works on the global `player` / `hero` / `heroUp`, which bindP() points at one player at a time.
-const MAX_PLAYERS = 4;
-const P_COLORS = ['#4aaaff', '#ffb43a', '#7ee05a', '#ee6ae8'];
+const MAX_PLAYERS = 8;
+const P_COLORS = ['#4aaaff', '#ffb43a', '#7ee05a', '#ee6ae8', '#ff5a5a', '#3fe0d0', '#f5f07a', '#b48cff'];
 const REVIVE_TIME = 2, REVIVE_REACH = 1.6 * T;
 let players = [], me = 0, departed = {}, pings = [], evenRot = 0, uid = 0, gridVer = 0;
 const has = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);
@@ -367,7 +402,7 @@ function splitEven(n) {
 // tile, searching outward from the core over walkable tiles only, so the hero never lands inside a building or
 // in a pocket walled off from the core.
 function heroSpawn(p) {
-  const x0 = CX * T + T / 2 + ((p.id % 4) - 1.5) * 22, y0 = (CY + 2.6) * T, r = p.r || 10;
+  const x0 = CX * T + T / 2 + ((p.id % MAX_PLAYERS) - (MAX_PLAYERS - 1) / 2) * 14, y0 = (CY + 2.6) * T, r = p.r || 10;
   if (!grid || !grid.length || !terrain || !bodyBlocked(x0, y0, r)) return [x0, y0];
   const open = (x, y) => inB(x, y) && !grid[y][x] && !isCore(x, y) && !blockT(x, y);
   const seen = new Set(), key = (x, y) => y * COLS + x;
@@ -400,7 +435,7 @@ function heroSpawn(p) {
 function makePlayer(id, name, type, colorI = id) {
   const h = HEROES[type] || HEROES.ranger;
   const p = { id, name, colorI, color: P_COLORS[colorI % P_COLORS.length], heroType: HEROES[type] ? type : 'ranger', hero: h, isHero: true,
-    heroUp: { dmg: 0, rate: 0, range: 0, multi: 0, armor: 0, taunt: 0, aura: 0, power: 0 }, wallet: 0, ready: false, remote: false,
+    heroUp: { dmg: 0, rate: 0, range: 0, multi: 0, armor: 0, taunt: 0, aura: 0, power: 0, ammo: 0, arrow: 0 }, wallet: 0, ready: false, remote: false,
     x: 0, y: 0, r: 10, hp: h.hp, maxHp: h.hp, alive: true, respawnT: 0, reviveT: 0,
     cd: 0, lastHit: 99, aim: 0, speed: h.speed, work: null,
     stats: { kills: 0, dmg: 0, gold: 0, built: 0, revives: 0 } };
@@ -1463,7 +1498,9 @@ function hoveredBuilding() {
   const tx = tileOf(mouse.x), ty = tileOf(mouse.y);
   return inB(tx, ty) ? grid[ty][tx] : null;
 }
-function sellValue(b) { return b.build > 0 ? b.spent : Math.floor(b.spent * 0.5 * (b.hp / b.maxHp)); }   // cancelling a build refunds it all
+const ENG_REFUND = 0.9;   // the Engineer salvages 90% of what a building cost (everyone else 50%), scaled by its health
+// For the bound player (the seller): cancelling a build refunds it all
+function sellValue(b) { return b.build > 0 ? b.spent : Math.floor(b.spent * (heroType === 'engineer' ? ENG_REFUND : 0.5) * (b.hp / b.maxHp)); }
 // Anyone can sell any building; the refund goes to the seller's wallet
 function sell(b) {
   const refund = sellValue(b);
@@ -1499,6 +1536,7 @@ function applyCommand(pid, c) {
     case 'up': if (at && at.b) upgrade(at.b); break;
     case 'work': if (at && p.alive) startWork(at.tx, at.ty); break;
     case 'hero': if (has(HERO_UPS, c.k)) buyHero(c.k); break;
+    case 'arrow': switchArrow(c.k); break;
     case 'rally': {
       if (!num(c.px) || !num(c.py)) break;
       const rb = tile(c.bx, c.by);
@@ -1568,6 +1606,10 @@ addEventListener('keydown', e => {
     return;
   }
   if ((gameState === 'help' || gameState === 'settings') && (k === 'escape' || k === 'backspace')) { gameState = menuReturn; return; }
+  if (gameState === 'help') {
+    const d = { arrowdown: 40, arrowup: -40, pagedown: 300, pageup: -300, ' ': 300, home: -1e9, end: 1e9 }[k];
+    if (d) { e.preventDefault(); scrollHelp(d); return; }
+  }
   if (gameState === 'paused' && k === 'escape') { gameState = 'play'; return; }
   if (k === 'p') gameState = gameState === 'paused' ? 'play' : (gameState === 'play' ? 'paused' : gameState);
   if (gameState === 'play' && k === 'escape') {   // Esc backs out of build/rally mode first, otherwise pauses
@@ -1577,6 +1619,7 @@ addEventListener('keydown', e => {
   if (gameState !== 'play') return;
   const hk = '7890'.indexOf(k);
   if (hk >= 0) cmd({ t: 'hero', k: heroOrder()[hk] });
+  if (k === 'z') cmd({ t: 'arrow' });
   const idx = '123456'.indexOf(k);
   if (k === 'b') { rallyMode = null; selected = selected === 'bridge' ? null : 'bridge'; }
   if (k === 'm') { rallyMode = null; selected = selected === 'medic' ? null : 'medic'; }
@@ -1652,6 +1695,7 @@ function onMouseDown(e) {
     if (e.button === 0 && inMap()) { cmd({ t: 'rally', px: mouse.x, py: mouse.y, bx: rallyMode.tx, by: rallyMode.ty }); if (net.role === 'client') orderFx = { x: mouse.x, y: mouse.y, t: 0.8 }; }
     rallyMode = null; return;
   }
+  if (e.button === 2 && mouse.sy >= H) { selected = null; return; }
   if (e.button === 2) {
     const b = hoveredBuilding();
     if (b) armSell(b); else if (!tryWork(tileOf(mouse.x), tileOf(mouse.y))) selected = null;
@@ -1660,8 +1704,9 @@ function onMouseDown(e) {
   mouse.down = true;
   if (mouse.sy >= H) {
     if (mouse.sx - barX() >= HERO_X) {
-      const h = Math.floor((mouse.sx - barX() - HERO_X) / HERO_W);
-      if (h >= 0 && h < HERO_ORDER.length) cmd({ t: 'hero', k: heroOrder()[h] });
+      const h = Math.floor((mouse.sx - barX() - HERO_X) / heroW()), hk = heroOrder()[h], cell = arrowCellAt(mouse.sx - barX(), mouse.sy);
+      if (cell >= 0) { if (cell <= heroUp.ammo) cmd({ t: 'arrow', k: cell }); }   // the Ranger's arrow-type picker
+      else if (hk) cmd({ t: 'hero', k: hk });
       return;
     }
     const slot = Math.floor((mouse.sx - barX() - 12) / SLOT_W);
@@ -1673,6 +1718,7 @@ function onMouseDown(e) {
 }
 canvas.addEventListener('mousedown', onMouseDown);
 canvas.addEventListener('wheel', e => {
+  if (gameState === 'help') { e.preventDefault(); scrollHelp(e.deltaY * (e.deltaMode ? 40 : 1)); return; }
   if (gameState !== 'play') return;
   e.preventDefault(); updateMouse(e);
   if (mouse.sy < H) zoomAt(ZOOM * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), mouse.sx, mouse.sy);
@@ -1798,6 +1844,11 @@ function updateHero(p, dt) {
     for (const tgt of swung) {
       if (hero.kind === 'melee') { hurt(tgt, heroDmg(), p.id); knockBack(tgt, p); burst(tgt.x, tgt.y, '#fff', 5, 90); }
       else if (hero.kind === 'fire') projectiles.push({ kind: 'fireball', x: p.x, y: p.y, target: tgt, speed: 420, dmg: heroDmg(), splash: hero.splash * T, src: p.id });
+      else if (hero.kind === 'bolt' && heroUp.arrow) {   // Ranger's frost / fire arrows
+        const a = heroUp.arrow;
+        if (ARROWS[a].splash) projectiles.push({ kind: 'boombolt', x: p.x, y: p.y, target: tgt, speed: 600, dmg: heroDmg() * ARROWS[a].dmg, splash: ARROWS[a].splash * T, src: p.id });
+        else projectiles.push({ kind: a === 1 ? 'icebolt' : 'firebolt', x: p.x, y: p.y, target: tgt, speed: 650, dmg: heroDmg() * ARROWS[a].dmg, full: heroDmg(), fx: a, src: p.id });
+      }
       else projectiles.push({ kind: hero.kind === 'rivet' ? 'rivet' : 'bullet', x: p.x, y: p.y, target: tgt, speed: hero.kind === 'rivet' ? 720 : 650, dmg: heroDmg(), src: p.id });
     }
   }
@@ -1812,6 +1863,20 @@ function updateHero(p, dt) {
     }
   if (core.hp < core.maxHp && rectDist(p.x, p.y, coreRect.x, coreRect.y, coreRect.w, coreRect.h) < T * 1.5)
     core.hp = Math.min(core.maxHp, core.hp + 4 * (heroType === 'engineer' ? engRepair(player) : 1) * dt);
+  p.beam = null;
+  if (heroType === 'engineer') {
+    let best = null, bf = 0.98;
+    for (const t of [...soldiers, ...players]) {
+      if (t === p || (t.isHero ? !t.alive : t.dead) || Math.hypot(t.x - p.x, t.y - p.y) > ENG_HEAL_R + (t.r || 0)) continue;
+      const f = t.hp / t.maxHp;
+      if (f < bf) { bf = f; best = t; }
+    }
+    if (best) {
+      healAmount(best, engHeal(p) * dt);
+      p.beam = [best.x, best.y];
+      if (Math.random() < dt * 8) particles.push({ x: best.x + rand(-8, 8), y: best.y + rand(-8, 8), vx: 0, vy: -35, life: 0.5, max: 0.5, color: '#7f7', s: 3 });
+    }
+  }
 }
 
 // ---------- Update ----------
@@ -1859,6 +1924,15 @@ function update(dt) {
       if (e.burrow) { e.dirtT = (e.dirtT || 0) - dt; if (e.dirtT <= 0) { e.dirtT = 0.3; burst(e.x, e.y, '#6b4e33', 2, 40); } }
     }
     const tt = e.fly ? GRASS : terr(tileOf(e.x), tileOf(e.y));
+    if (tt === WATER && (e.slowT > 0 || e.burnT > 0)) {   // wading or swimming washes off frost and puts out fire
+      if (e.burnT > 0) burst(e.x, e.y, '#d8e4ea', 8, 70);
+      e.slowT = 0; e.burnT = 0;
+    }
+    if (e.burnT > 0) {
+      const st = Math.min(dt, e.burnT), flash = e.hitT; e.burnT -= dt;
+      hurt(e, e.burnDps * st, e.burnSrc ?? null); e.hitT = flash;   // burning doesn't make the enemy flash every frame
+      if (e.dead) continue;
+    }
     const sp = e.speed * (e.slowT > 0 ? 0.45 : 1) * (e.burrow ? DIG_SLOW : 1) * (tt === WATER ? (e.swim ? SWIM_FAST : WATER_SLOW) : tt === ROCK ? CLIMB_SLOW : 1) * dt;
     let tx = null, ty = null, attack = null;
     // Who ground enemies get distracted by: a Knight within taunt range pulls every one of them in;
@@ -2005,7 +2079,7 @@ function update(dt) {
     const eng = towerEngineer(px, py);
     if (b.type === 'frost') {
       let hit = false;
-      for (const e of enemies) if (!e.dead && d2(px, py, e.x, e.y) < range * range) { e.slowT = 1.6; hurt(e, stat(b, 'dmg'), null, eng); hit = true; }
+      for (const e of enemies) if (!e.dead && d2(px, py, e.x, e.y) < range * range) { if (e.fly || !waterAt(e.x, e.y)) chill(e, 1.6); hurt(e, stat(b, 'dmg'), null, eng); hit = true; }
       if (hit) { b.cd = stat(b, 'interval'); b.pulse = 0.4; b.pulseN = (b.pulseN || 0) + 1; }
       continue;
     }
@@ -2039,6 +2113,11 @@ function update(dt) {
           for (const e of enemies) if (!e.dead && d2(p.target.x, p.target.y, e.x, e.y) < p.splash ** 2) hurt(e, p.dmg, p.src ?? null);
           burst(p.target.x, p.target.y, '#ff8a30', 16, 150); burst(p.target.x, p.target.y, '#ffe27a', 8, 90);
           addBlast(p.target.x, p.target.y, p.splash);
+        } else if (p.fx) {   // frost arrow chills, fire arrow sets alight (each replaces the other); water puts both out at once
+          const e = p.target, wet = !e.fly && waterAt(e.x, e.y);
+          if (!wet) { if (p.fx === 1) chill(e, ICE_T); else ignite(e, p.full * BURN_DPS, p.src ?? null); }
+          hurt(e, p.dmg, p.src ?? null);
+          burst(p.x, p.y, ARROWS[p.fx].color, p.fx === 2 ? 6 : 5, 70);
         } else { hurt(p.target, p.dmg, p.src ?? null, p.eng ?? null); burst(p.x, p.y, '#fff', 3, 60); }
       }
       else { p.x += dx / l * p.speed * dt; p.y += dy / l * p.speed * dt; }
@@ -2773,8 +2852,8 @@ function drawEnemy(e) {
     const g = ctx.createRadialGradient(e.x, e.y, e.r * 0.5, e.x, e.y, e.r * 2.1);
     g.addColorStop(0, `rgba(255,40,30,${0.25 + 0.15 * p})`); g.addColorStop(1, 'rgba(255,40,30,0)');
     ctx.fillStyle = g; circ(e.x, e.y, e.r * 2.1); ctx.fill(); }
-  const hit = e.hitT > 0, frozen = e.slowT > 0;
-  const c = hit ? '#ffffff' : frozen ? mixHex(e.color, '#bfeaff', 0.55) : e.color;
+  const hit = e.hitT > 0, frozen = e.slowT > 0, burning = e.burnT > 0;
+  const c = hit ? '#ffffff' : frozen ? mixHex(e.color, '#bfeaff', 0.55) : burning ? mixHex(e.color, '#ff7a2a', 0.35) : e.color;
   const vs = e.r < 11 ? 1.3 : 1.1; // draw small critters a bit larger than their hitbox so they read clearly
   ctx.save(); ctx.translate(x, y); ctx.rotate(e.face); ctx.scale(vs, vs);
   (SPRITES[e.type] || SPRITES.grunt)(e, c, gait, hit);
@@ -2784,6 +2863,17 @@ function drawEnemy(e) {
     for (let i = 0; i < 3; i++) { const a = e.wob * 0.4 + i * 2.1, d = e.r * 0.9;
       const px = x + Math.cos(a) * d, py = y + Math.sin(a) * d;
       ctx.beginPath(); ctx.moveTo(px, py - 3); ctx.lineTo(px + 1.5, py); ctx.lineTo(px, py + 3); ctx.lineTo(px - 1.5, py); ctx.fill(); }
+  }
+  if (burning) { // flickering flames licking up off the body
+    const t = performance.now() / 1000;
+    for (let i = 0; i < 4; i++) {
+      const ph = (t * 2.2 + i * 0.27 + (e.id || 0) * 0.13) % 1, fx = x + (i - 1.5) * e.r * 0.45 + Math.sin(t * 9 + i) * 1.5;
+      const fy = y - e.r * 0.2 - ph * e.r * 1.1, fh = (4 + e.r * 0.35) * (1 - ph * 0.6), fw = 2 + e.r * 0.12;
+      ctx.globalAlpha = 0.85 * (1 - ph);
+      ctx.fillStyle = ph < 0.4 ? '#ffd25a' : '#ff7a2a';
+      ctx.beginPath(); ctx.moveTo(fx - fw, fy); ctx.quadraticCurveTo(fx, fy - fh * 1.6, fx + fw, fy); ctx.quadraticCurveTo(fx, fy + fw, fx - fw, fy); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
   if (e.hp < e.maxHp) bar(e.x - e.r, e.y - e.r - 8 - lift, e.r * 2, 3, e.hp / e.maxHp, '#f55');
 }
@@ -3067,6 +3157,10 @@ function drawHeroRange() {
 }
 function drawPlayer() {
   const p = player, multi = coop();
+  if (p.alive && p.beam) {   // Engineer healing a friendly unit
+    ctx.strokeStyle = `rgba(120,255,140,${0.5 + 0.3 * Math.sin(performance.now() / 90)})`; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.beam[0], p.beam[1]); ctx.stroke();
+  }
   if (!p.alive) {
     if (!multi) return;
     // Downed: a faded hero, a revive ring that fills while a teammate stands close, and the respawn countdown
@@ -3389,17 +3483,32 @@ function drawBarSlots() {
   ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = '#8a93a3'; ctx.font = 'bold 9px sans-serif';
   ctx.fillText('HERO WEAPON', HERO_X + 2, H + 3);
   heroOrder().forEach((k, i) => {
-    const u = HERO_UPS[k], x = HERO_X + i * HERO_W, y = H + 14, w = HERO_W - 4, h = BAR - 20;
+    const u = HERO_UPS[k], x = HERO_X + i * heroW(), y = H + 14, w = heroW() - 4, h = BAR - 20;
     const lvl = heroUp[k], maxed = lvl >= u.max, c = heroCost(k), afford = !maxed && heroFunds(player) >= c;
     const hover = mouse.sy >= y && mouse.sy <= y + h && mouse.sx >= x && mouse.sx <= x + w;
     ctx.fillStyle = hover && afford ? '#34405a' : '#262c36'; ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = afford ? u.color : '#3a424f'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, w, h);
     ctx.fillStyle = afford || maxed ? '#fff' : '#888';
-    fitText(`${u.key}. ${u.name}`, x + 5, y + 4, w - 8, 11, 'bold ');
-    for (let j = 0; j < u.max; j++) { ctx.fillStyle = j < lvl ? u.color : '#3a424f'; ctx.fillRect(x + 5 + j * 11, y + 20, 8, 6); }
+    fitText(`${'7890'[i]}. ${u.name}`, x + 5, y + 4, w - 8, 11, 'bold ');   // keys 7-0 follow the slot order
+    const pip = Math.min(11, Math.floor((w - 8) / 5));
+    for (let j = 0; j < u.max; j++) { ctx.fillStyle = j < lvl ? u.color : '#3a424f'; ctx.fillRect(x + 5 + j * pip, y + 20, pip - 3, 6); }
     ctx.font = '11px sans-serif'; ctx.fillStyle = maxed ? '#9f9' : afford ? '#ffd84a' : '#a66';
-    ctx.fillText(maxed ? 'MAX' : `${c} gold`, x + 5, y + 33);
+    fitText(maxed ? 'MAX' : `${c} gold`, x + 5, y + 33, w - 8, 11);
   });
+  if (hasArrows()) {   // Ranger: click an arrow type to shoot it (Z cycles); types not yet bought are locked
+    const r = arrowPick(), hov = arrowCellAt(mouse.sx, mouse.sy);
+    ctx.fillStyle = '#262c36'; ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = ARROWS[heroUp.arrow || 0].color; ctx.lineWidth = 1.5; ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = '#fff'; fitText('Z. Arrow type', r.x + 5, r.y + 4, r.w - 8, 11, 'bold ');
+    ARROWS.forEach((a, i) => {
+      const cx = r.x + 4 + (i % 2) * (r.cw + 2), cy = r.y + 17 + Math.floor(i / 2) * (r.ch + 2), own = i <= (heroUp.ammo || 0), cur = i === (heroUp.arrow || 0);
+      ctx.fillStyle = cur ? shade(a.color, -0.55) : own && hov === i ? '#34405a' : '#1b1f26'; ctx.fillRect(cx, cy, r.cw, r.ch);
+      if (cur) { ctx.strokeStyle = a.color; ctx.lineWidth = 1.5; ctx.strokeRect(cx, cy, r.cw, r.ch); }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = cur ? '#fff' : own ? a.color : '#555c68';
+      fitText(own ? a.short : '🔒', cx + r.cw / 2, cy + r.ch / 2 + 1, r.cw - 2, 10, 'bold ');
+    });
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  }
 }
 function fitText(t, x, y, maxW, size, weight = '') {
   let s = size; ctx.font = `${weight}${s}px sans-serif`;
@@ -3408,8 +3517,10 @@ function fitText(t, x, y, maxW, size, weight = '') {
 }
 // ---------- Menu screens (home, help, settings, pause, game over) ----------
 let uiButtons = [], menuReturn = 'menu', helpTab = 0, hoverUi = false;
+let helpScroll = 0, helpMax = 0;   // help text scrolls inside a clipped box (wheel, drag, arrow keys)
 function startGame() { applyMapSize(); reset(); computeFlow(); gameState = 'play'; }
-function openScreen(name) { if (gameState !== 'help' && gameState !== 'settings') menuReturn = gameState; gameState = name; }
+function openScreen(name) { if (gameState !== 'help' && gameState !== 'settings') menuReturn = gameState; gameState = name; helpScroll = 0; }
+function scrollHelp(d) { helpScroll = Math.max(0, Math.min(helpMax, helpScroll + d)); }
 function uiButton(x, y, w, h, label, onClick, o = {}) {
   const hover = mouse.sx >= x && mouse.sx <= x + w && mouse.sy >= y && mouse.sy <= y + h;
   if (hover) hoverUi = true;
@@ -3507,11 +3618,11 @@ function helpContent(tab) {
   if (tab === 0 && touchUI) return helpContent('basics').map(r => r[0] === 'Camera' ? ['Touch controls', TOUCH_HELP] : r);
   if (tab === 0 || tab === 'basics') return [
     ['Goal', 'Monsters pour in from every edge of the map. Protect the crystal core in the middle. You lose if the core is destroyed — or if your hero dies (in co-op: if every hero is down at once).'],
-    ['Heroes', 'Pick a hero before each game. Ranger: fast, long-range crossbow. Knight: very tough; ground enemies within 3 tiles drop what they are doing to fight him, the sword hits every enemy in reach in the half-circle in front of him and knocks it back (he turns slower than the others, so his back is his weak side), and throwing daggers (the shortest range of any hero) reach a little further. Chops four times as fast. Large enemies ignore a Ranger or Mage unless they are close enough to hit them. Mage: longest reach, exploding fireballs, but fragile. Engineer: weak rivet gun, but buildings within 4 tiles of him (up to 6 with Aura upgrades) work 40% faster (up to 90% with Aura Power), construction near him finishes 3× faster, and he repairs three times as fast (both up to 5× with Aura Power). Towers (Arrow, Cannon, Frost) inside his aura pay him 40% (up to 65%) of the gold from the damage they deal.'],
+    ['Heroes', 'Pick a hero before each game. Ranger: fast, long-range crossbow. Knight: very tough; ground enemies within 3 tiles drop what they are doing to fight him, the sword hits every enemy in reach in the half-circle in front of him and knocks it back (he turns slower than the others, so his back is his weak side), and throwing daggers (the shortest range of any hero) reach a little further. Chops four times as fast. Large enemies ignore a Ranger or Mage unless they are close enough to hit them. Mage: longest reach, exploding fireballs, but fragile. Engineer: weak gun, but buildings near him work 40% faster, build 3× faster and are repaired 3× faster. He heals nearby soldiers and teammates like a medic, gets 90% back when selling a building (others 50%), and nearby towers share their kill gold with him.'],
     ['Your hero', 'WASD moves, or left-click open ground to walk there (click a tree to walk over and chop it) — while walking, rings show your attack range. Your hero attacks the nearest enemies automatically and slowly regenerates health out of combat. Standing near your buildings repairs them; standing beside the core slowly repairs it.'],
     ['Building', 'Choose a building with its key (1–6, M, B) or by clicking the bottom bar, then click a tile inside the dashed circle around your hero that it can see — trees and mountains block the view. Drag to paint walls or bridges. New buildings take 1 second to construct and do nothing until finished (right-click a construction site twice to cancel for a full refund). Click a building (or press E) to upgrade it, up to level 3 (Barracks up to level 5). Right-click (or X) it twice within 2 seconds to sell it. Q / Esc deselects.'],
     ['Waves & gold', 'Enemies drop gold. Between waves there is a short break — press SPACE to start the next wave early and pocket the remaining seconds as gold. Clearing a wave pays a bonus.'],
-    ['Hero weapon', 'Spend gold on Damage (7), Fire Rate (8), Range (9) and Multishot (0) using the keys or the buttons on the right of the bar. The Knight has his own upgrades instead of Range and Multishot: Armor (9) cuts the damage he takes by 10% per level, and Taunt (0) pulls enemies in from 1 tile further away per level. The Engineer has Aura Power (9) and Aura Size (0) instead: Power, per level, makes buildings in his aura work 10% faster (on top of the base 40%), construction near him and his repairs 0.4× faster (3× up to 5×) and raises his tower gold cut by 5% (40% up to 65%), and Size widens the aura by half a tile per level.'],
+    ['Hero weapon', 'Spend gold on Damage (7), Fire Rate (8), Range (9) and Multishot (0) using the keys or the buttons on the right of the bar. The Knight has his own upgrades instead of Range and Multishot: Armor (9) cuts the damage he takes by 10% per level, and Taunt (0) pulls enemies in from 1 tile further away per level. The Engineer has Aura Power (9) and Aura Size (0) instead: Power, per level, makes buildings in his aura work 10% faster (on top of the base 40%), construction near him and his repairs 0.4× faster (3× up to 5×), his healing 20% stronger (15 up to 30 HP/s) and raises his tower gold cut by 5% (40% up to 65%), and Size widens the aura by half a tile per level. The Ranger has no Fire Rate or Range upgrades (his crossbow already shoots fast); his slots are Damage (7), Multishot (8) and Arrows (9): level 1 adds frost arrows (60% damage, slow the target), level 2 adds fire arrows (80% damage, then the target burns for 3 seconds), level 3 adds explosive arrows (70% damage to every enemy within a tile of the impact, flyers included). Pick the arrow type you shoot in the Arrow type box at the right end of the bar (on touch screens, the Arrow type button), or cycle through the ones you own with Z. An enemy can be chilled or burning, not both — each replaces the other — and wading into water washes off both.'],
     ['Camera', 'Arrow keys, middle-mouse drag, or clicking the minimap scrolls the view. C recenters on your hero. P or Esc opens the pause menu (Esc first cancels a build or rally selection). The ❚❚ button in the top bar freezes the action while you look around and build; the Speed button (or [ and ]) changes game speed up to 4× — [ at 1× pauses, ] resumes.'],
   ];
   if (tab === 1) return ORDER.map(k => [`${DEFS[k].name}  ·  key ${DEFS[k].key}  ·  ${DEFS[k].cost} gold`, BUILD_HELP[k]]);
@@ -3544,7 +3655,7 @@ function helpContent(tab) {
   return [
     ['Mountains', 'Impassable for everything on the ground. Nothing can be built on them.'],
     ['Trees', 'Block movement and building. Right-click a tree near your hero to chop it down for +' + CHOP_GOLD + ' gold.'],
-    ['Rivers', 'Wading is painfully slow (about 1/8 speed) for your hero, soldiers and enemies alike, so enemies go out of their way to use bridges — perfect choke points.'],
+    ['Rivers', 'Wading is painfully slow (about 1/8 speed) for your hero, soldiers and enemies alike, so enemies go out of their way to use bridges — perfect choke points. Water also puts out burning enemies and washes off frost.'],
     ['Bridges', 'Every river has a few. Build more with B to open shortcuts or steer the enemy.'],
     ['Maps', 'Every game generates a new map. Change its size in Settings.'],
   ];
@@ -3553,12 +3664,27 @@ function drawHelp() {
   dimScreen(0.9);
   bigTitle('HELP', 54, 36);
   const tw = 130, tx0 = W / 2 - (HELP_TABS.length * tw + (HELP_TABS.length - 1) * 8) / 2;
-  HELP_TABS.forEach((t, i) => uiButton(tx0 + i * (tw + 8), 92, tw, 36, t, () => { helpTab = i; }, { active: helpTab === i, size: 15 }));
-  let y = 160;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  for (const [head, body] of helpContent(helpTab)) {
-    ctx.fillStyle = '#ffd84a'; ctx.font = 'bold 15px sans-serif'; ctx.fillText(head, 120, y); y += 22;
-    ctx.fillStyle = '#d6dbe4'; ctx.font = '14px sans-serif'; y = wrapText(body, 120, y, W - 240, 19) + 12;
+  HELP_TABS.forEach((t, i) => uiButton(tx0 + i * (tw + 8), 92, tw, 36, t, () => { helpTab = i; helpScroll = 0; }, { active: helpTab === i, size: 15 }));
+  // Text box between the tabs and the Back button; content taller than the box scrolls
+  const top = 146, bot = H + BAR - 98, mx = Math.min(120, Math.max(24, W * 0.06));
+  const items = helpContent(helpTab);
+  const lay = dry => {
+    let y = top + 14 - (dry ? 0 : helpScroll);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    for (const [head, body] of items) {
+      ctx.fillStyle = '#ffd84a'; ctx.font = 'bold 15px sans-serif'; if (!dry) ctx.fillText(head, mx, y); y += 22;
+      ctx.fillStyle = '#d6dbe4'; ctx.font = '14px sans-serif'; y = wrapText(body, mx, y, W - 2 * mx - 12, 19, dry) + 12;
+    }
+    return y;
+  };
+  helpMax = Math.max(0, lay(true) - bot); helpScroll = Math.min(helpScroll, helpMax);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, top, W, bot - top); ctx.clip(); lay(false); ctx.restore();
+  if (helpMax > 0) {   // scrollbar plus fade hints at whichever edge has more text
+    const th = bot - top, bh = Math.max(30, th * th / (th + helpMax)), by = top + (th - bh) * helpScroll / helpMax;
+    ctx.fillStyle = '#2a313c'; ctx.fillRect(W - mx + 18, top, 6, th);
+    ctx.fillStyle = '#8a93a3'; ctx.fillRect(W - mx + 18, by, 6, bh);
+    if (helpScroll < helpMax) { ctx.fillStyle = '#9aa3b2'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(touchUI ? '▼ drag to scroll' : '▼ scroll for more', W / 2, bot + 6); }
   }
   uiButton(W / 2 - 100, H + BAR - 70, 200, 44, 'Back', () => { gameState = menuReturn; });
 }
@@ -3645,6 +3771,22 @@ function draw() {
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, 6.28); ctx.fill();
       ctx.fillStyle = 'rgba(255,140,50,0.35)'; ctx.beginPath(); ctx.arc(p.x - Math.cos(p.ang || 0) * 7, p.y - Math.sin(p.ang || 0) * 7, 5, 0, 6.28); ctx.fill();
     }
+    else if (p.kind === 'boombolt') {   // Ranger's explosive arrow: dark shaft with a fizzing charge on the tip
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang || 0);
+      ctx.fillStyle = 'rgba(200,200,200,0.35)'; ctx.fillRect(-15, -1.5, 9, 3);
+      ctx.fillStyle = '#5a4030'; ctx.fillRect(-7, -1.2, 9, 2.4);
+      ctx.fillStyle = '#c0392b'; ctx.fillRect(1, -2.5, 4, 5);
+      ctx.fillStyle = Math.random() < 0.5 ? '#ffd25a' : '#fff'; circ(-1, -3, 1.3); ctx.fill();
+      ctx.restore();
+    }
+    else if (p.kind === 'icebolt' || p.kind === 'firebolt') {   // Ranger's frost / fire arrows: a coloured bolt with a glowing trail
+      const fire = p.kind === 'firebolt';
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang || 0);
+      ctx.fillStyle = fire ? 'rgba(255,120,30,0.4)' : 'rgba(140,220,255,0.4)'; ctx.fillRect(-14, -2, 10, 4);
+      ctx.fillStyle = fire ? '#ffd25a' : '#e8fbff'; ctx.fillRect(-6, -1.5, 9, 3);
+      ctx.fillStyle = fire ? '#ff6a20' : '#6fd3ff'; ctx.beginPath(); ctx.moveTo(6, 0); ctx.lineTo(2, -3); ctx.lineTo(2, 3); ctx.fill();
+      ctx.restore();
+    }
     else { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang || 0);
       ctx.fillStyle = p.kind === 'arrow' ? '#f4e2b0' : '#fff6a0'; ctx.fillRect(-6, -1.5, p.kind === 'arrow' ? 12 : 8, 3); ctx.restore(); }
   }
@@ -3702,7 +3844,7 @@ const SNAP_RATE = 15, INPUT_RATE = 30, NET_TIMEOUT = 10;   // seconds of silence
 const net = { role: null, peer: null, conns: [], host: null, code: '', status: '', inGame: false, lobby: [], set: null,
   focus: 'name', codeIn: '', busy: false, beacon: null, scan: null, scanAt: -1e9, games: [], scanned: false, sendT: 0, snapT: 0, lobbyT: 0, sentGv: -1, queued: 0, hostMenu: 0, hostSpeed: 1, heard: 0, hbT: 0 };
 let netFx = [], netTer = [];
-const ETK = Object.keys(ETYPES), DFK = Object.keys(DEFS), PRK = ['bullet', 'arrow', 'shell', 'eshell', 'dagger', 'fireball', 'rivet'];
+const ETK = Object.keys(ETYPES), DFK = Object.keys(DEFS), PRK = ['bullet', 'arrow', 'shell', 'eshell', 'dagger', 'fireball', 'rivet', 'icebolt', 'firebolt', 'boombolt'];
 const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
 // Messages travel as raw JSON strings. Anything bigger than FRAME characters (the map sent at game start) is split
 // into numbered frames "~id|index|count|…" and put back together on arrival.
@@ -3918,11 +4060,11 @@ function makeSnap(full) {
     hm: gameState === 'play' || gameState === 'over' ? 0 : 1, go: gameState === 'over' ? lossReason : 0 };
   s.P = players.map(p => [p.id, r1(p.x), r1(p.y), Math.ceil(p.hp), p.maxHp, p.alive ? 1 : 0, r2(p.aim || 0), p.moving ? 1 : 0, r1(p.walk || 0),
     r2(p.moveAng || 0), r2(p.fireT || 0), r2(p.throwT || 0), r2(p.flash || 0), p.wallet, p.ready ? 1 : 0, r1(p.respawnT), r2(p.reviveT),
-    [p.heroUp.dmg, p.heroUp.rate, p.heroUp.range, p.heroUp.multi, p.heroUp.armor || 0, p.heroUp.taunt || 0, p.heroUp.aura || 0, p.heroUp.power || 0],
+    [p.heroUp.dmg, p.heroUp.rate, p.heroUp.range, p.heroUp.multi, p.heroUp.armor || 0, p.heroUp.taunt || 0, p.heroUp.aura || 0, p.heroUp.power || 0, p.heroUp.ammo || 0, p.heroUp.arrow || 0],
     p.work ? [p.work.tx, p.work.ty, r2(p.work.t), p.work.need, p.work.kind === 'tree' ? 0 : 1] : 0,
-    p.name, p.heroType, p.colorI, [p.stats.kills, Math.round(p.stats.dmg), p.stats.gold, p.stats.built, p.stats.revives], p.respawned || 0]);
+    p.name, p.heroType, p.colorI, [p.stats.kills, Math.round(p.stats.dmg), p.stats.gold, p.stats.built, p.stats.revives], p.respawned || 0, p.beam ? [Math.round(p.beam[0]), Math.round(p.beam[1])] : 0]);
   s.E = enemies.map(e => {
-    const a = [e.id, Math.round(e.x), Math.round(e.y), Math.ceil(e.hp), r1(e.face), (e.slowT > 0 ? 1 : 0) | (e.hitT > 0 ? 2 : 0) | (e.lunge ? 4 : 0) | (e.burrow ? 8 : 0),
+    const a = [e.id, Math.round(e.x), Math.round(e.y), Math.ceil(e.hp), r1(e.face), (e.slowT > 0 ? 1 : 0) | (e.hitT > 0 ? 2 : 0) | (e.lunge ? 4 : 0) | (e.burrow ? 8 : 0) | (e.burnT > 0 ? 16 : 0),
       full || !e.sent ? [ETK.indexOf(e.type), Math.round(e.maxHp)] : 0];
     if (e.siege) a.push(r2(e.aim || 0), r2(e.recoil || 0), r2(e.shootT || 0), e.rage ? 1 : 0);
     else if (e.type === 'boss') a.push(r2(e.wind || 0), e.rage ? 1 : 0);
@@ -4096,13 +4238,14 @@ function applySnap(s) {
   let jumped = false;
   const oldP = new Map(players.map(p => [p.id, p]));
   players = s.P.map(a => {
-    const [id, x, y, hp, maxHp, alive, aim, moving, walk, moveAng, fireT, throwT, flash, wallet, ready, respawnT, reviveT, up, wk, name, type, colorI, st, rsp] = a;
+    const [id, x, y, hp, maxHp, alive, aim, moving, walk, moveAng, fireT, throwT, flash, wallet, ready, respawnT, reviveT, up, wk, name, type, colorI, st, rsp, bm] = a;
     let p = oldP.get(id);
     if (!p || p.heroType !== type) { p = makePlayer(id, name, type, colorI); p.x = x; p.y = y; p.rsp = rsp; }
     Object.assign(p, { name, hp, maxHp, alive: !!alive, wallet, ready: !!ready, respawnT, reviveT, fireT, throwT, aim, flash: Math.max(p.flash || 0, flash) });
-    p.heroUp = { dmg: up[0], rate: up[1], range: up[2], multi: up[3], armor: up[4] || 0, taunt: up[5] || 0, aura: up[6] || 0, power: up[7] || 0 };
+    p.heroUp = { dmg: up[0], rate: up[1], range: up[2], multi: up[3], armor: up[4] || 0, taunt: up[5] || 0, aura: up[6] || 0, power: up[7] || 0, ammo: up[8] || 0, arrow: up[9] || 0 };
     p.work = wk ? { tx: wk[0], ty: wk[1], t: wk[2], need: wk[3], kind: wk[4] ? 'bridge' : 'tree' } : null;
     p.stats = { kills: st[0], dmg: st[1], gold: st[2], built: st[3], revives: st[4] };
+    p.beam = bm || null;
     if (id === me) {
       if (!p.alive || rsp !== p.rsp || Math.hypot(x - p.x, y - p.y) > 3 * T) { if (rsp !== p.rsp) jumped = true; p.x = x; p.y = y; }
       p.rsp = rsp;
@@ -4121,7 +4264,7 @@ function applySnap(s) {
     }
     if (a[6]) e.maxHp = a[6][1];
     e.nx = a[1]; e.ny = a[2]; e.hp = a[3]; e.face = a[4];
-    e.slowT = a[5] & 1 ? 1 : 0; if (a[5] & 2) e.hitT = 0.09; if (a[5] & 4) e.lunge = 0.12; e.burrow = !!(a[5] & 8);
+    e.slowT = a[5] & 1 ? 1 : 0; if (a[5] & 2) e.hitT = 0.09; if (a[5] & 4) e.lunge = 0.12; e.burrow = !!(a[5] & 8); e.burnT = a[5] & 16 ? 1 : 0;
     if (e.siege) { if (a.length > 7) { e.aim = a[7]; e.recoil = a[8]; e.shootT = a[9]; e.rage = a[10] || 0; } }
     else if (e.type === 'boss' && a.length > 7) { e.wind = a[7]; e.rage = a[8]; }
     enemies.push(e);
@@ -4333,16 +4476,17 @@ function drawLobby() {
   ctx.font = 'bold 40px monospace'; ctx.fillStyle = '#ffd84a'; ctx.fillText(net.code.split('').join(' '), W / 2, 134);
   // Player slots
   const x0 = W / 2 - 270, rw = 540;
+  const perCol = 4, sw = (rw - 10) / 2;   // two columns of four slots
   for (let i = 0; i < MAX_PLAYERS; i++) {
-    const r = net.lobby[i], y = 172 + i * 40;
-    ctx.fillStyle = r ? '#1f2633' : '#161b23'; ctx.fillRect(x0, y, rw, 34);
+    const r = net.lobby[i], sx = x0 + Math.floor(i / perCol) * (sw + 10), y = 172 + (i % perCol) * 40;
+    ctx.fillStyle = r ? '#1f2633' : '#161b23'; ctx.fillRect(sx, y, sw, 34);
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    if (!r) { ctx.font = 'italic 14px sans-serif'; ctx.fillStyle = '#5c6575'; ctx.fillText('Waiting for a player…', x0 + 18, y + 17); continue; }
-    ctx.fillStyle = P_COLORS[r.color % P_COLORS.length]; ctx.fillRect(x0, y, 5, 34);
-    ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = '#fff';
-    ctx.fillText(r.name + (r.id === me ? '  (you)' : '') + (r.id === 0 ? '  · host' : ''), x0 + 18, y + 18);
+    if (!r) { ctx.font = 'italic 14px sans-serif'; ctx.fillStyle = '#5c6575'; ctx.fillText('Waiting for a player…', sx + 14, y + 17); continue; }
+    ctx.fillStyle = P_COLORS[r.color % P_COLORS.length]; ctx.fillRect(sx, y, 5, 34);
     const h = HEROES[r.hero] || HEROES.ranger;
-    ctx.textAlign = 'right'; ctx.font = 'bold 15px sans-serif'; ctx.fillStyle = shade(h.color, 0.35); ctx.fillText(h.name, x0 + rw - 16, y + 18);
+    ctx.textAlign = 'right'; ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = shade(h.color, 0.35); ctx.fillText(h.name, sx + sw - 10, y + 18);
+    ctx.textAlign = 'left'; ctx.fillStyle = '#fff';
+    fitText(r.name + (r.id === me ? ' (you)' : '') + (r.id === 0 ? ' · host' : ''), sx + 14, y + 18, sw - 100, 15, 'bold ');
   }
   // Your hero
   const mine = net.lobby.find(r => r.id === me), hy = 352;
@@ -4524,7 +4668,7 @@ const endStick = e => { e.preventDefault(); for (const t of e.changedTouches) if
 stickZone.addEventListener('touchend', endStick, { passive: false }); stickZone.addEventListener('touchcancel', endStick, { passive: false });
 
 // ----- Touches on the canvas -----
-const tch = { id: null, kind: null, sx0: 0, sy0: 0, lx: 0, ly: 0, pan: false, mx: 0, my: 0, btn: null };
+const tch = { id: null, kind: null, sx0: 0, sy0: 0, lx: 0, ly: 0, pan: false, mx: 0, my: 0, btn: null, drag: false };
 function touchPos(t) {
   const r = canvas.getBoundingClientRect();
   return [(t.clientX - r.left) * CW / r.width, (t.clientY - r.top) * CH / r.height];
@@ -4546,7 +4690,7 @@ canvas.addEventListener('touchstart', e => {
   tch.id = t.identifier; tch.pan = false;
   updateMouse(t);
   tch.sx0 = tch.lx = mouse.sx; tch.sy0 = tch.ly = mouse.sy;
-  if (gameState !== 'play') { tch.kind = 'menu'; tch.btn = uiAt(); return; }   // menu buttons fire on release
+  if (gameState !== 'play') { tch.kind = 'menu'; tch.btn = uiAt(); tch.drag = false; return; }   // menu buttons fire on release
   const overUi = overHud(PAUSE_BTN) || overHud(SPEED_BTN) || stripBtns.some(inBtn) || overMinimap() || mouse.sy >= H;
   if (overUi) {
     if (overMinimap() && touchMode === 'rally') {
@@ -4576,7 +4720,10 @@ canvas.addEventListener('touchmove', e => {
   const t = [...e.changedTouches].find(t => t.identifier === tch.id);
   if (!t) return;
   updateMouse(t);
-  if (tch.kind === 'menu') return;
+  if (tch.kind === 'menu') {   // dragging on the help screen scrolls it instead of pressing a button
+    if (gameState === 'help' && (tch.drag || Math.abs(mouse.sy - tch.sy0) > 10)) { tch.drag = true; tch.btn = null; scrollHelp(tch.ly - mouse.sy); }
+    tch.lx = mouse.sx; tch.ly = mouse.sy; return;
+  }
   if (tch.kind === 'mm') { minimapJump(); return; }
   mouse.anchor = tch.kind === 'tap' || tch.kind === 'paint';
   if (tch.kind === 'paint') { if (inMap()) tryPlace(tileOf(mouse.x), tileOf(mouse.y), selected); return; }
@@ -4586,7 +4733,7 @@ function endCanvasTouch(e, cancel) {
   if (tch.pan) { if (e.touches.length === 0) tch.pan = false; tch.kind = null; return; }
   const t = [...e.changedTouches].find(t => t.identifier === tch.id);
   if (!t) return;
-  if (!cancel && tch.kind === 'menu') {
+  if (!cancel && tch.kind === 'menu' && !tch.drag) {
     const b = uiAt();
     if (b && b === tch.btn) b.onClick();
     else if (b && tch.btn && b.x === tch.btn.x && b.y === tch.btn.y) b.onClick();   // same button, redrawn since the press
@@ -4768,19 +4915,35 @@ for (const k of ORDER) {
   try { ctx = g; g.setTransform(2, 0, 0, 2, 0, 0); drawBuildingIcon(k, 0, 0, 26); } catch (e) {} finally { ctx = main; }
   bbItems.push({ el, k, cls: '' });
 }
-// Four hero-upgrade buttons; each slot shows whichever upgrade the current hero has there (the Knight has his own)
-HERO_ORDER.forEach((k0, slot) => {
+// Hero-upgrade buttons; each slot shows whichever upgrade the current hero has there (the Knight has his own).
+// Slots the current hero doesn't have are hidden (the Ranger has three, plus the arrow-type switch after them).
+[...HERO_ORDER, 'ammo'].forEach((k0, slot) => {
   const u = HERO_UPS[k0];
-  const el = addBB('hero', `<div class="n">${u.name}</div><div class="pips">${'<i></i>'.repeat(5)}</div><div class="c"></div>`, () => cmd({ t: 'hero', k: heroOrder()[slot] }));
+  const el = addBB('hero', `<div class="n">${u.name}</div><div class="pips">${'<i></i>'.repeat(5)}</div><div class="c"></div>`, () => {
+    const k = heroOrder()[slot];
+    if (k === 'ammo' && heroUp.ammo >= HERO_UPS.ammo.max) cmd({ t: 'arrow' }); else if (k) cmd({ t: 'hero', k });
+  });
   el.style.borderColor = u.color;
   bbItems.push({ el, slot, hk: k0, shown: '', cls: '', cost: '', lvl: -1, pips: [...el.querySelectorAll('.pips i')], c: el.querySelector('.c'), n: el.querySelector('.n') });
 });
+{ // Ranger: tap to switch between the arrow types he owns
+  const el = addBB('hero', `<div class="n">Arrow type</div><div class="c"></div>`, () => cmd({ t: 'arrow' }));
+  bbItems.push({ el, sw: true, cls: '', cost: '', c: el.querySelector('.c') });
+}
 function updateBuildBar() {
   if (gameState !== 'play' || !player) return;
-  const gold = funds(player);
+  const gold = funds(player), ranger = heroOrder().includes('ammo');
   for (const it of bbItems) {
     let cls = 'bb';
     if (it.k) { cls += selected === it.k ? ' sel' : ''; if (gold < DEFS[it.k].cost) cls += ' poor'; }
+    else if (it.sw || !heroOrder()[it.slot]) {
+      if (!it.sw || !ranger) cls += ' gone';
+      else {
+        const a = ARROWS[heroUp.arrow || 0], txt = heroUp.ammo ? a.name : '—';
+        cls += ' hero' + (heroUp.ammo ? '' : ' poor');
+        if (txt !== it.cost) { it.cost = txt; it.c.textContent = txt; it.c.style.color = heroUp.ammo ? a.color : ''; it.el.style.borderColor = heroUp.ammo ? a.color : ''; }
+      }
+    }
     else {
       it.hk = heroOrder()[it.slot];
       if (it.shown !== it.hk) {   // hero changed: relabel the slot
