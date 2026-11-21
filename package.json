@@ -8,12 +8,14 @@
     "build:web": "node scripts/build-web.mjs",
     "sync": "npm run build:web && npx cap sync android",
     "apk": "npm run sync && cd android && ./gradlew assembleDebug",
-    "install-apk": "npm run apk && adb install -r android/app/build/outputs/apk/debug/app-debug.apk"
+    "install-apk": "npm run apk && adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
+    "server": "node scripts/build-web.mjs && node server/server.mjs",
+    "service": "bash scripts/service.sh"
   },
   "dependencies": {
     "@capacitor/android": "8.6.2",
     "@capacitor/core": "8.6.2",
-    "peerjs": "1.5.4"
+    "ws": "8.18.3"
   },
   "devDependencies": {
     "@capacitor/cli": "8.6.2"

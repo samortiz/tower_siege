@@ -3,7 +3,8 @@
   "appName": "Tower Siege",
   "webDir": "www",
   "android": {
-    "backgroundColor": "#111418"
+    "backgroundColor": "#111418",
+    "allowMixedContent": true
   },
   "plugins": {
     "SystemBars": {

@@ -12,6 +12,7 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(LanPlugin.class);   // the device's LAN address, for finding game servers (see LanPlugin)
         super.onCreate(savedInstanceState);
         // A game: keep the screen awake while it is in front.
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -25,7 +26,7 @@ public class MainActivity extends BridgeActivity {
         hideSystemBars();
 
         // Back button: let the game back out of its own screens (like Esc). On the main menu it returns false,
-        // and the app goes to the background instead of being closed (so a hosted room survives a stray press).
+        // and the app goes to the background instead of being closed.
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
